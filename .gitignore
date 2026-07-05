@@ -1,0 +1,27 @@
+# Окружение
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.pytest_cache/
+
+# Локальный контекст (не публикуется на GitHub)
+CLAUDE.md
+
+# Результаты и данные
+*.png
+outputs/
+metrics/
+ml_png_result/
+prog_zip/
+data/
+
+# Постоянный кэш скачанных данных (геофизика/NURE/MRDS/CMMI) — НЕ публиковать (сотни МБ)
+datacache/
+
+# ОС
+desktop.ini
+.DS_Store

@@ -1,4 +1,0 @@
-[projection]
-
-pj4=+proj=tmerc +lon_0=105 +lat_0=0 +x_0=500000.000000 +y_0=0 +k_0=1 +towgs84=24,-123,-94,-0.02,0.25,0.13,1.1 +ellps=krass +units=m +over +lon_wrap=45 +no_defs
-

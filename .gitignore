@@ -14,7 +14,7 @@ outputs/
 metrics/
 ml_png_result/
 prog_zip/
-data/
+#data/
 
 # Постоянный кэш скачанных данных (геофизика/NURE/MRDS/CMMI) — НЕ публиковать (сотни МБ)
 datacache/

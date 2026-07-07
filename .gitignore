@@ -8,9 +8,6 @@ __pycache__/
 .ipynb_checkpoints/
 .pytest_cache/
 
-# Локальный контекст (не публикуется на GitHub)
-CLAUDE.md
-
 # Результаты и данные
 *.png
 outputs/

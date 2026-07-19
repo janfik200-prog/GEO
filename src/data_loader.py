@@ -49,9 +49,13 @@ def find_base_dir() -> Path:
     )
 
 
-def read_sidecar_proj4(shp_path: Path) -> str | None:
-    """Прочитать proj4-проекцию из sidecar-файла ``*_shp.pj4`` (формат ГИС Интегро)."""
-    sidecar = shp_path.with_name(shp_path.stem + "_shp.pj4")
+def read_sidecar_proj4(shp_path: Path, suffix: str = "_shp.pj4") -> str | None:
+    """Прочитать proj4-проекцию из sidecar-файла (формат ГИС Интегро).
+
+    По умолчанию ищет ``<stem>_shp.pj4`` (шейп-файлы); для сеток `.pgrid`
+    передайте ``suffix="_pgrid.pj4"`` (см. :func:`src.integro_grid.read_grid_proj4`).
+    """
+    sidecar = shp_path.with_name(shp_path.stem + suffix)
     if sidecar.exists():
         txt = sidecar.read_text(encoding="utf-8", errors="ignore")
         m = re.search(r"pj4=(.+)", txt)

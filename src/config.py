@@ -31,6 +31,21 @@ MASK_SENTINEL: str = "svita_new.shp"    # признак валидной пап
 OUT_SUBDIR: str = "ml_png_result"       # подпапка для результата
 OUT_PNG_NAME: str = "forecast_ml_final.png"
 
+# --- Датасет v1 (золото, лист R-48-XI,XII): источники и общая сетка ---
+# Целевая сетка = сетка критериального расчёта prognoz.pgrid (500 м, 154x149):
+# метки и baseline лягут на неё без пересчёта.
+PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
+GOLD_TARGET_PGRID: Path = PROJECT_ROOT / "data" / "Gis-integro" / "Расчет" / "prognoz.pgrid"
+SBORKA_DIR: Path = PROJECT_ROOT / "data" / "SBORKA_DOP"
+GRAVMAG_PGRID: Path = SBORKA_DIR / "ГРАВИКА_МАГНИТКА" / "грав_маг.pgrid"
+LANDSAT_PGRID: Path = SBORKA_DIR / "КОСМОСНИМОК" / "landsat_fragm.pgrid"
+TOPO5_PGRID: Path = SBORKA_DIR / "РЕЛЬЕФ" / "topo5_new.pgrid"
+TOPO_SHP_DIR: Path = SBORKA_DIR / "ТОПО"
+PROCESSED_DIR: Path = PROJECT_ROOT / "data" / "processed"
+TOPO5_TO_METERS: float = 0.2      # единицы topo5_new = метры*5 (регрессия на Copernicus DEM, 19.07)
+LANDSAT_NODATA: int = 0           # DN=0 в landsat_fragm — фон повёрнутой сцены, не данные
+ANGLE_PROPS: tuple[str, ...] = ("gr_1GFI_25", "mag_1GFI_25")  # поля направлений: ресемплинг через sin/cos
+
 # --- Слои (роль -> базовое имя shapefile без расширения) ---
 LAYER_FILES: dict[str, str] = {
     "mask": "svita_new",         # маска территории (свиты)

@@ -193,6 +193,7 @@ def leave_one_object_out(
             "held_idx": held_idx,
             "train_idx": train_idx,
             "eval_pool": eval_pool,
+            "feature_importances": model.feature_importances_,
         })
     return results
 
@@ -393,6 +394,26 @@ def summarize_sweep(sweep_df: pd.DataFrame, area: float | None = None) -> pd.Dat
         "n_seeds": g.size(),
     })
     return out.round(3).reset_index()
+
+
+def fold_feature_importances(n_seeds: int = 5, buffer_m: float | None = None) -> pd.DataFrame:
+    """Средние важности признаков по фолдам LOO (усреднение по ``n_seeds`` сидам).
+
+    Диагностика «сигнал или шум»: если топ-признаки трёх фолдов не
+    пересекаются, модель ловит в каждом фолде свой шум, а не общий
+    геологический сигнал. Возвращает таблицу признак × фолд (столбцы
+    ``object_1..3``), отсортированную по средней важности.
+    """
+    X, labels_flat, coords, feature_names, _meta = build_dataset()
+    acc: dict[int, list[np.ndarray]] = {}
+    for s in range(n_seeds):
+        for r in leave_one_object_out(X, labels_flat, coords, seed=s, buffer_m=buffer_m):
+            acc.setdefault(r["summary"]["object"], []).append(r["feature_importances"])
+    df = pd.DataFrame(
+        {f"object_{o}": np.mean(v, axis=0) for o, v in sorted(acc.items())},
+        index=feature_names,
+    )
+    return df.loc[df.mean(axis=1).sort_values(ascending=False).index]
 
 
 def buffer_sensitivity(

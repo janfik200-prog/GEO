@@ -83,11 +83,17 @@ def training_features() -> pd.DataFrame:
 def build_dataset() -> tuple[np.ndarray, np.ndarray, np.ndarray, list[str], integro_grid.GridMeta]:
     """Собрать ``(X, labels_flat, coords, feature_names, meta)`` для LOO-CV.
 
-    ``labels_flat`` — метка объекта (0 фон, 1..``CRIT_N_OBJECTS``) на ячейку,
-    в том же C-порядке (строка 0 — север), что и признаки/сетка prognoz.
+    ``labels_flat`` — метка объекта на ячейку, в том же C-порядке (строка 0 —
+    север), что и признаки/сетка prognoz: ``1..CRIT_N_OBJECTS`` — объекты,
+    ``0`` — чистый фон, ``-1`` — критериально-перспективные ячейки
+    (``prognoz <= CRIT_TARGET_THRESHOLD``), не вошедшие в топ-``CRIT_N_OBJECTS``
+    компонент. Метка ``-1`` не даёт таким ячейкам попасть в фон обучения:
+    фон из перспективных ячеек занижал бы контраст объект/фон.
     """
     meta, prognoz = load_prognoz_grid()
-    labels_flat = label_ore_objects(prognoz).ravel()
+    labels = label_ore_objects(prognoz)
+    labels[(labels == 0) & (prognoz <= config.CRIT_TARGET_THRESHOLD)] = -1
+    labels_flat = labels.ravel()
 
     feat_df = training_features().fillna(0)
     if len(feat_df) != labels_flat.size:
@@ -107,9 +113,13 @@ def leave_one_object_out(
 ) -> list[dict]:
     """Leave-one-object-out: обучение на 2 из 3 объектов, третий — контроль.
 
-    Фон для обучения берётся случайно из ячеек ВНЕ всех объектов, за вычетом
-    буфера ``CRIT_HOLDOUT_BUFFER_M`` вокруг held-out объекта (иначе часть фона
-    пространственно совпадает с окрестностью контроля и завышает lift).
+    Фон для обучения берётся случайно из ячеек чистого фона (``labels_flat == 0``,
+    т.е. без критериально-перспективных ячеек с меткой ``-1`` — см.
+    :func:`build_dataset`), за вычетом буфера ``CRIT_HOLDOUT_BUFFER_M`` вокруг
+    held-out объекта (иначе часть фона пространственно совпадает с окрестностью
+    контроля и завышает lift). Тот же буфер применяется и к обучающим
+    положительным ячейкам — ячейки обучающих объектов ближе буфера к контролю
+    исключаются, чтобы модель не выучивала окрестность контроля напрямую.
     Возвращает список словарей по каждому объекту: сводка метрик (``summary``),
     прогноз по всей сетке (``score_all``), позиции held-out ячеек (``held_idx``)
     и индексы, использованные для обучения (``train_idx``, для permutation-теста).
@@ -122,11 +132,20 @@ def leave_one_object_out(
         held_idx = all_idx[labels_flat == obj]
         if held_idx.size == 0:
             continue
-        train_obj_idx = all_idx[(labels_flat != obj) & (labels_flat != 0)]
 
         tree = cKDTree(coords[held_idx])
         dist_to_held, _ = tree.query(coords)
-        bg_candidates = all_idx[(labels_flat == 0) & (dist_to_held > config.CRIT_HOLDOUT_BUFFER_M)]
+        far_from_held = dist_to_held > config.CRIT_HOLDOUT_BUFFER_M
+
+        train_pos_all = all_idx[(labels_flat != obj) & (labels_flat > 0)]
+        train_obj_idx = train_pos_all[far_from_held[train_pos_all]]
+        if train_obj_idx.size == 0:
+            raise ValueError(
+                f"Все ячейки обучающих объектов попали в буфер "
+                f"{config.CRIT_HOLDOUT_BUFFER_M} м вокруг объекта {obj} — "
+                f"уменьшите CRIT_HOLDOUT_BUFFER_M"
+            )
+        bg_candidates = all_idx[(labels_flat == 0) & far_from_held]
 
         rng = np.random.default_rng(seed)
         n_bg = min(config.CRIT_N_BACKGROUND, len(bg_candidates))
@@ -143,6 +162,9 @@ def leave_one_object_out(
             "object": obj,
             "n_cells": int(held_idx.size),
             "n_train_pos": int(train_obj_idx.size),
+            "n_train_pos_total": int(train_pos_all.size),   # до вычета буфера — потеря видна в отчёте
+            "n_bg_candidates": int(bg_candidates.size),
+            "n_perspective_excluded": int((labels_flat == -1).sum()),
             "n_background": int(bg_idx.size),
         }
         for area in config.CRIT_AREAS:

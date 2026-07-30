@@ -77,9 +77,43 @@ def test_training_features_excludes_factor_layers():
 def test_build_dataset_three_objects():
     X, labels_flat, coords, feature_names, meta = build_dataset()
     assert X.shape[0] == labels_flat.size == coords.shape[0]
-    assert set(np.unique(labels_flat)) <= {0, 1, 2, 3}
+    assert set(np.unique(labels_flat)) <= {-1, 0, 1, 2, 3}   # -1 — перспективные вне топ-3
+    assert (labels_flat == -1).sum() > 0   # шумовые компоненты <50 ячеек существуют (см. config)
     assert (labels_flat > 0).sum() > 0
     assert not any(f in feature_names for f in config.CRIT_EXCLUDE_FACTOR_FEATURES)
+
+
+@pytest.mark.skipif(not (PGRID.exists() and DATASET.exists()), reason="критериальная сетка/датасет не собраны")
+def test_loo_train_sets_are_clean(monkeypatch):
+    """Фон обучения не содержит перспективных ячеек, обучающие объекты — вне буфера контроля."""
+    from scipy.spatial import cKDTree
+
+    from src.criterial_target import load_prognoz_grid
+
+    monkeypatch.setattr(config, "CRIT_N_BACKGROUND", 200)
+    monkeypatch.setattr(config, "ENS_N_ROUNDS", 2)
+    X, labels_flat, coords, _feature_names, _meta = build_dataset()
+    _, prognoz = load_prognoz_grid()
+    prognoz_flat = prognoz.ravel()
+
+    buffer_removed_any = False
+    for r in leave_one_object_out(X, labels_flat, coords, seed=0):
+        train_idx = r["train_idx"]
+        # перспективные вне топ-3 (метка -1) не участвуют в обучении вообще
+        assert (labels_flat[train_idx] >= 0).all()
+        bg = train_idx[labels_flat[train_idx] == 0]
+        pos = train_idx[labels_flat[train_idx] > 0]
+        # фон чист: ни одной критериально-перспективной ячейки
+        assert (prognoz_flat[bg] > config.CRIT_TARGET_THRESHOLD).all()
+        # и фон, и обучающие положительные — дальше буфера от контрольного объекта
+        dist, _ = cKDTree(coords[r["held_idx"]]).query(coords[train_idx])
+        assert (dist > config.CRIT_HOLDOUT_BUFFER_M).all()
+        assert pos.size > 0
+        if pos.size < r["summary"]["n_train_pos_total"]:
+            buffer_removed_any = True
+    # буфер нетривиален: хотя бы в одном фолде он реально вырезал обучающие ячейки
+    # (на датасете v1 объекты 1 и 3 лежат ближе буфера друг к другу)
+    assert buffer_removed_any
 
 
 @pytest.mark.skipif(not (PGRID.exists() and DATASET.exists()), reason="критериальная сетка/датасет не собраны")

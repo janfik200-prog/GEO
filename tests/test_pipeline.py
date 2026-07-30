@@ -18,7 +18,8 @@ from src import config  # noqa: E402
 from src.utils import normalize_01, robust_normalize_01  # noqa: E402
 from src.features import build_grid, build_features, distance_to_proximity  # noqa: E402
 from src.model import (  # noqa: E402
-    mark_presence, train_model, compute_prospectivity, sample_presence_background,
+    BackgroundEnsemble, mark_presence, train_model, compute_prospectivity,
+    sample_presence_background,
 )
 from src.validation import _coverage, assign_spatial_blocks  # noqa: E402
 
@@ -70,6 +71,25 @@ def test_sample_presence_background_shapes_and_determinism():
     assert y1.sum() == len(pos)
     assert len(s1) == len(pos) + 50
     assert np.array_equal(s1, s2)  # детерминизм по сиду
+
+
+def test_background_ensemble_seed_reaches_members():
+    """Сид ансамбля должен доходить до RF/GB, а не только до подвыборки фона."""
+    rng = np.random.default_rng(0)
+    X = rng.random((80, 3))
+    y = (np.arange(80) < 20).astype(int)
+
+    ens = BackgroundEnsemble(n_rounds=2, random_state=5).fit(X, y)
+    seeds = [m.random_state for m in ens.models_]
+    assert len(set(seeds)) > 1                       # члены не под одним общим сидом
+    assert config.RANDOM_STATE not in seeds or len(set(seeds)) == len(seeds)
+
+    # разные сиды ансамбля -> разные сиды членов; одинаковые -> воспроизводимо
+    ens2 = BackgroundEnsemble(n_rounds=2, random_state=6).fit(X, y)
+    assert seeds != [m.random_state for m in ens2.models_]
+    ens3 = BackgroundEnsemble(n_rounds=2, random_state=5).fit(X, y)
+    assert seeds == [m.random_state for m in ens3.models_]
+    np.testing.assert_allclose(ens.predict_proba(X), ens3.predict_proba(X))
 
 
 def test_coverage_perfect_ranking():

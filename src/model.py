@@ -22,7 +22,9 @@ from . import config
 from .utils import robust_normalize_01, smooth_on_regular_grid, top_n_components
 
 
-def _make_rf(n_estimators: int | None = None) -> RandomForestClassifier:
+def _make_rf(
+    n_estimators: int | None = None, random_state: int | None = None,
+) -> RandomForestClassifier:
     """Создать Random Forest с параметрами из конфига (число деревьев переопределяемо)."""
     return RandomForestClassifier(
         n_estimators=n_estimators or config.RF_N_ESTIMATORS,
@@ -30,7 +32,7 @@ def _make_rf(n_estimators: int | None = None) -> RandomForestClassifier:
         min_samples_leaf=config.RF_MIN_SAMPLES_LEAF,
         min_samples_split=config.RF_MIN_SAMPLES_SPLIT,
         class_weight="balanced_subsample",
-        random_state=config.RANDOM_STATE,
+        random_state=config.RANDOM_STATE if random_state is None else random_state,
         n_jobs=-1,
     )
 
@@ -81,7 +83,10 @@ class BackgroundEnsemble:
             idx = np.concatenate([pos_idx, draw])
             Xr, yr = X[idx], y[idx]
             for make in (_make_rf, _make_gb):
-                model = make()
+                # у каждого члена свой сид, выведенный из random_state ансамбля:
+                # общий config.RANDOM_STATE делал сид-свипы бессмысленными
+                # (менялась только подвыборка фона, но не сами RF/GB)
+                model = make(random_state=int(rng.integers(np.iinfo(np.int32).max)))
                 model.fit(Xr, yr)
                 self.models_.append(model)
         return self

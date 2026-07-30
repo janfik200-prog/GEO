@@ -16,6 +16,7 @@ from src.criterial_target import (  # noqa: E402
     leave_one_object_out,
     permutation_significance,
     fold_feature_importances,
+    real_point_delta_bootstrap,
     seed_sweep,
     summarize_sweep,
     training_features,
@@ -55,6 +56,23 @@ def test_exclude_factor_features_kept_minimal():
     for f in ("dist_tect1", "dist_tect2", "dens_tect", "dist_magm", "dens_magm",
               "dist_struct", "dist_facies", "dist_paleo"):
         assert f in excl
+
+
+def test_real_point_delta_bootstrap_synthetic():
+    """ML идеально ранжирует точки, baseline случаен -> дельта положительна, ДИ выше нуля."""
+    rng = np.random.default_rng(0)
+    n = 1000
+    point_idx = np.arange(30)
+    score = rng.random(n)
+    score[point_idx] = 2.0                       # ML: все точки в топе
+    prognoz = rng.random(n).reshape(20, 50).astype(np.float32)   # baseline: шум
+    loo_like = [{"score_all": score}]
+    result = real_point_delta_bootstrap(
+        loo_like, prognoz, meta=None, area=0.1, n_boot=100, seed=1, point_idx=point_idx,
+    )
+    assert result["n_points"] == 30
+    assert result["delta_lift"] > 5
+    assert result["ci_low"] > 0
 
 
 def test_coverage_pool_excludes_train_budget():

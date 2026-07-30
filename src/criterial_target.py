@@ -524,3 +524,44 @@ def real_point_verification(
             "n_points": int(point_idx.size),
         })
     return pd.DataFrame(rows)
+
+
+def real_point_delta_bootstrap(
+    loo_results: list[dict], prognoz: np.ndarray, meta: integro_grid.GridMeta,
+    area: float | None = None, n_boot: int = 2000, seed: int | None = None,
+    point_idx: np.ndarray | None = None,
+) -> dict[str, float]:
+    """Бутстрэп по реальным точкам: значима ли Δlift@area (ML − критериальный baseline).
+
+    Ресемплинг точек с возвращением; 95% ДИ по перцентилям. ДИ, включающий 0,
+    означает: на ``n_points`` точках различие ML и критериального статистически
+    не установлено. Точки пространственно кластеризованы, поэтому независимый
+    бутстрэп по точкам скорее сужает ДИ — трактовать консервативно.
+    """
+    area = config.CRIT_PERM_AREA if area is None else area
+    seed = config.CRIT_SEED if seed is None else seed
+    if point_idx is None:
+        point_idx = load_real_points(meta)
+    if point_idx.size == 0:
+        return {}
+
+    ml_score = np.mean([r["score_all"] for r in loo_results], axis=0)
+    baseline_score = -prognoz.ravel()
+    observed = (
+        _coverage(ml_score, point_idx, area) - _coverage(baseline_score, point_idx, area)
+    ) / area
+
+    rng = np.random.default_rng(seed)
+    deltas = np.empty(n_boot)
+    for i in range(n_boot):
+        bs = rng.choice(point_idx, size=point_idx.size, replace=True)
+        deltas[i] = (
+            _coverage(ml_score, bs, area) - _coverage(baseline_score, bs, area)
+        ) / area
+    return {
+        "area": float(area),
+        "delta_lift": float(observed),
+        "ci_low": float(np.quantile(deltas, 0.025)),
+        "ci_high": float(np.quantile(deltas, 0.975)),
+        "n_points": int(point_idx.size),
+    }

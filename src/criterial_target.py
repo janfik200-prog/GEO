@@ -356,6 +356,42 @@ def run_leave_one_object_out_cv(seed: int | None = None) -> tuple[pd.DataFrame, 
     return summary_df, loo_results, perm_df
 
 
+def seed_sweep(n_seeds: int | None = None) -> pd.DataFrame:
+    """Сид-свип LOO: распределение lift по сидам вместо точечной оценки.
+
+    Смена сида меняет подвыборку фона и сиды членов RF/GB; измеренный шумовой
+    пол одного сида — порядка ±30% lift (фолд 1: 0.81 -> 1.05 только от смены
+    сидов членов), то есть сопоставим с обсуждаемыми эффектами. Поэтому в отчёт
+    идут медиана и разброс по ``CRIT_SWEEP_N_SEEDS`` прогонам, а не одно число.
+    Возвращает «длинную» таблицу: строка = (seed, object) со всеми метриками
+    из ``summary``. Агрегация — :func:`summarize_sweep`.
+    """
+    n_seeds = config.CRIT_SWEEP_N_SEEDS if n_seeds is None else n_seeds
+    X, labels_flat, coords, _feature_names, _meta = build_dataset()
+    rows = []
+    for s in range(n_seeds):
+        for r in leave_one_object_out(X, labels_flat, coords, seed=s):
+            rows.append({"seed": s, **r["summary"]})
+    return pd.DataFrame(rows)
+
+
+def summarize_sweep(sweep_df: pd.DataFrame, area: float | None = None) -> pd.DataFrame:
+    """Сводка сид-свипа по объектам: медиана, квартели, min/max lift и доля сидов с lift > 1."""
+    area = config.CRIT_PERM_AREA if area is None else area
+    col = f"lift@{int(round(area * 100))}%"
+    g = sweep_df.groupby("object")[col]
+    out = pd.DataFrame({
+        "median": g.median(),
+        "q25": g.quantile(0.25),
+        "q75": g.quantile(0.75),
+        "min": g.min(),
+        "max": g.max(),
+        "share_lift>1": g.apply(lambda s: float((s > 1.0).mean())),
+        "n_seeds": g.size(),
+    })
+    return out.round(3).reset_index()
+
+
 def load_real_points(meta: integro_grid.GridMeta) -> np.ndarray:
     """Плоские индексы ячеек сетки prognoz с реальными точками рудопроявлений.
 

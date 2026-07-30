@@ -233,6 +233,7 @@ CRIT_AREAS: tuple[float, ...] = (0.05, 0.10, 0.15, 0.20)  # площади дл�
 CRIT_PERM_AREA: float = 0.10              # площадь для permutation-теста значимости
 CRIT_PERM_N: int = 200                    # число перестановок
 CRIT_SEED: int = 42
+CRIT_SWEEP_N_SEEDS: int = 20              # сид-свип LOO: шумовой пол одного сида ~±30% lift
 
 # --- Итоговая поверхность: веса локального бонуса ---
 LOCAL_BONUS_WEIGHTS: dict[str, float] = {

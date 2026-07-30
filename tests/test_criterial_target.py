@@ -15,6 +15,8 @@ from src.criterial_target import (  # noqa: E402
     label_ore_objects,
     leave_one_object_out,
     permutation_significance,
+    seed_sweep,
+    summarize_sweep,
     training_features,
 )
 
@@ -182,6 +184,19 @@ def test_loo_train_sets_are_clean(monkeypatch):
     # буфер нетривиален: хотя бы в одном фолде он реально вырезал обучающие ячейки
     # (на датасете v1 объекты 1 и 3 лежат ближе буфера друг к другу)
     assert buffer_removed_any
+
+
+@pytest.mark.skipif(not (PGRID.exists() and DATASET.exists()), reason="критериальная сетка/датасет не собраны")
+def test_seed_sweep_smoke(monkeypatch):
+    monkeypatch.setattr(config, "CRIT_N_BACKGROUND", 200)
+    monkeypatch.setattr(config, "ENS_N_ROUNDS", 2)
+    df = seed_sweep(n_seeds=2)
+    assert len(df) == 2 * config.CRIT_N_OBJECTS
+    assert {"seed", "object", "lift@10%"} <= set(df.columns)
+    agg = summarize_sweep(df)
+    assert list(agg["object"]) == [1, 2, 3]
+    assert (agg["n_seeds"] == 2).all()
+    assert (agg["min"] <= agg["median"]).all() and (agg["median"] <= agg["max"]).all()
 
 
 @pytest.mark.skipif(not (PGRID.exists() and DATASET.exists()), reason="критериальная сетка/датасет не собраны")

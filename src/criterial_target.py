@@ -110,6 +110,7 @@ def build_dataset() -> tuple[np.ndarray, np.ndarray, np.ndarray, list[str], inte
 
 def leave_one_object_out(
     X: np.ndarray, labels_flat: np.ndarray, coords: np.ndarray, seed: int | None = None,
+    buffer_m: float | None = None, skip_empty_train: bool = False,
 ) -> list[dict]:
     """Leave-one-object-out: обучение на 2 из 3 объектов, третий — контроль.
 
@@ -131,6 +132,7 @@ def leave_one_object_out(
     permutation-тесту.
     """
     seed = config.CRIT_SEED if seed is None else seed
+    buffer_m = config.CRIT_HOLDOUT_BUFFER_M if buffer_m is None else buffer_m
     all_idx = np.arange(len(labels_flat))
     results = []
 
@@ -141,15 +143,16 @@ def leave_one_object_out(
 
         tree = cKDTree(coords[held_idx])
         dist_to_held, _ = tree.query(coords)
-        far_from_held = dist_to_held > config.CRIT_HOLDOUT_BUFFER_M
+        far_from_held = dist_to_held > buffer_m
 
         train_pos_all = all_idx[(labels_flat != obj) & (labels_flat > 0)]
         train_obj_idx = train_pos_all[far_from_held[train_pos_all]]
         if train_obj_idx.size == 0:
+            if skip_empty_train:
+                continue          # фолд развалился: все обучающие объекты в буфере
             raise ValueError(
                 f"Все ячейки обучающих объектов попали в буфер "
-                f"{config.CRIT_HOLDOUT_BUFFER_M} м вокруг объекта {obj} — "
-                f"уменьшите CRIT_HOLDOUT_BUFFER_M"
+                f"{buffer_m} м вокруг объекта {obj} — уменьшите буфер"
             )
         bg_candidates = all_idx[(labels_flat == 0) & far_from_held]
 
@@ -390,6 +393,58 @@ def summarize_sweep(sweep_df: pd.DataFrame, area: float | None = None) -> pd.Dat
         "n_seeds": g.size(),
     })
     return out.round(3).reset_index()
+
+
+def buffer_sensitivity(
+    buffers_m: tuple[float, ...] = (5_000, 10_000, 15_000, 20_000, 25_000, 30_000),
+    n_seeds: int = 5,
+) -> pd.DataFrame:
+    """Кривая чувствительности lift к буферу вокруг контрольного объекта.
+
+    Буфер 10 км меньше носителя сглаживающих фильтров признаков (окна
+    ``*_25``/``*_35`` = 12.5/17.5 км при dx=500 м), поэтому часть утечки
+    train/test через признаки остаётся. Кривая показывает, как lift меняется
+    с ростом буфера до и за радиус носителя; развал фолда (все обучающие
+    объекты в буфере, строка с ``collapsed=True``) — тоже результат: он
+    означает, что объекты пространственно неразделимы на этом масштабе.
+    По ``n_seeds`` сидов на буфер — точечные оценки шумят на ±30%.
+    """
+    X, labels_flat, coords, _feature_names, _meta = build_dataset()
+    rows = []
+    for b in buffers_m:
+        for s in range(n_seeds):
+            results = leave_one_object_out(
+                X, labels_flat, coords, seed=s, buffer_m=b, skip_empty_train=True,
+            )
+            found = set()
+            for r in results:
+                found.add(r["summary"]["object"])
+                rows.append({
+                    "buffer_km": b / 1000, "seed": s, "collapsed": False, **r["summary"],
+                })
+            for obj in range(1, config.CRIT_N_OBJECTS + 1):
+                if obj not in found and (labels_flat == obj).any():
+                    rows.append({
+                        "buffer_km": b / 1000, "seed": s, "collapsed": True, "object": obj,
+                    })
+    return pd.DataFrame(rows)
+
+
+def summarize_buffer_sensitivity(df: pd.DataFrame, area: float | None = None) -> pd.DataFrame:
+    """Сводка кривой: медианный lift и потеря обучающих ячеек по (буфер, объект)."""
+    area = config.CRIT_PERM_AREA if area is None else area
+    col = f"lift@{int(round(area * 100))}%"
+    rows = []
+    for (b, obj), g in df.groupby(["buffer_km", "object"]):
+        alive = g[~g["collapsed"]]
+        rows.append({
+            "buffer_km": b,
+            "object": obj,
+            f"median_{col}": float(alive[col].median()) if len(alive) else np.nan,
+            "n_train_pos": float(alive["n_train_pos"].median()) if len(alive) else 0.0,
+            "collapsed_share": float(g["collapsed"].mean()),
+        })
+    return pd.DataFrame(rows).round(3)
 
 
 def load_real_points(meta: integro_grid.GridMeta) -> np.ndarray:

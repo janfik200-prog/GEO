@@ -187,6 +187,26 @@ def test_loo_train_sets_are_clean(monkeypatch):
 
 
 @pytest.mark.skipif(not (PGRID.exists() and DATASET.exists()), reason="критериальная сетка/датасет не собраны")
+def test_loo_huge_buffer_collapses_folds():
+    """Гигантский буфер съедает все обучающие объекты: skip -> пусто, иначе ValueError."""
+    X, labels_flat, coords, _feature_names, _meta = build_dataset()
+    assert leave_one_object_out(
+        X, labels_flat, coords, seed=0, buffer_m=1e9, skip_empty_train=True,
+    ) == []
+    with pytest.raises(ValueError, match="буфер"):
+        leave_one_object_out(X, labels_flat, coords, seed=0, buffer_m=1e9)
+
+
+@pytest.mark.skipif(not (PGRID.exists() and DATASET.exists()), reason="критериальная сетка/датасет не собраны")
+def test_loo_zero_buffer_keeps_all_train_positives(monkeypatch):
+    monkeypatch.setattr(config, "CRIT_N_BACKGROUND", 200)
+    monkeypatch.setattr(config, "ENS_N_ROUNDS", 2)
+    X, labels_flat, coords, _feature_names, _meta = build_dataset()
+    for r in leave_one_object_out(X, labels_flat, coords, seed=0, buffer_m=0.0):
+        assert r["summary"]["n_train_pos"] == r["summary"]["n_train_pos_total"]
+
+
+@pytest.mark.skipif(not (PGRID.exists() and DATASET.exists()), reason="критериальная сетка/датасет не собраны")
 def test_seed_sweep_smoke(monkeypatch):
     monkeypatch.setattr(config, "CRIT_N_BACKGROUND", 200)
     monkeypatch.setattr(config, "ENS_N_ROUNDS", 2)

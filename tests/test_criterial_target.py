@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src import config  # noqa: E402
 from src.criterial_target import (  # noqa: E402
+    _random_object_placement,
     build_dataset,
     label_ore_objects,
     leave_one_object_out,
@@ -73,7 +74,57 @@ def test_permutation_significance_shape():
     train_idx = np.arange(10, 60)
     result = permutation_significance(score, held_idx, train_idx, area=0.1, n_perm=20, seed=1)
     assert set(result) == {"observed_lift", "null_mean", "null_q95", "p_value"}
-    assert 0.0 <= result["p_value"] <= 1.0
+    assert 0.0 < result["p_value"] <= 1.0   # сглаживание Phipson-Smyth: p=0 невозможен
+
+
+def test_random_object_placement_preserves_shape():
+    """Размещение — тот же контур (с точностью до сдвига/поворота/отражения)."""
+    shape = (30, 40)
+    # Г-образный объект из 4 ячеек
+    rel_r = np.array([0, 1, 2, 2])
+    rel_c = np.array([0, 0, 0, 1])
+    valid = np.ones(shape[0] * shape[1], dtype=bool)
+    rng = np.random.default_rng(7)
+    for _ in range(50):
+        idx = _random_object_placement(rel_r, rel_c, shape, valid, rng)
+        assert idx is not None
+        assert idx.size == 4 and np.unique(idx).size == 4
+        assert (idx >= 0).all() and (idx < shape[0] * shape[1]).all()
+        r, c = np.divmod(idx, shape[1])
+        # Г-фигура при любом элементе диэдра остаётся в bbox 3x2 или 2x3
+        hh, ww = r.max() - r.min() + 1, c.max() - c.min() + 1
+        assert {hh, ww} == {2, 3}
+
+
+def test_random_object_placement_respects_mask():
+    shape = (10, 10)
+    rel_r = np.array([0, 0])
+    rel_c = np.array([0, 1])
+    valid = np.zeros(100, dtype=bool)
+    valid[55:57] = True                      # единственное допустимое место: ячейки 55-56
+    rng = np.random.default_rng(0)
+    placements = [
+        idx for _ in range(3000)
+        if (idx := _random_object_placement(rel_r, rel_c, shape, valid, rng)) is not None
+    ]
+    assert placements                         # место находится
+    for idx in placements:
+        assert set(idx.tolist()) == {55, 56}
+
+
+def test_permutation_shape_preserving_null():
+    """Компактный контур с высоким скором значим против форм-сохраняющего null."""
+    shape = (20, 20)
+    rng = np.random.default_rng(3)
+    score = rng.random(400)
+    held_idx = np.array([0, 1, 20, 21])       # блок 2x2 в углу
+    score[held_idx] = 2.0                     # заведомый максимум
+    result = permutation_significance(
+        score, held_idx, train_idx=np.array([], dtype=int),
+        area=0.1, n_perm=50, seed=1, shape=shape,
+    )
+    assert result["observed_lift"] == pytest.approx(10.0)
+    assert result["p_value"] < 0.15           # 1/(1+50) + случайные попадания null на угол
 
 
 @pytest.mark.skipif(not DATASET.exists(), reason="dataset_v1.npz не собран")

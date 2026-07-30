@@ -194,6 +194,45 @@ def leave_one_object_out(
     return results
 
 
+def _random_object_placement(
+    rel_r: np.ndarray, rel_c: np.ndarray, shape: tuple[int, int],
+    valid_flat: np.ndarray, rng: np.random.Generator,
+) -> np.ndarray | None:
+    """Случайное форм-сохраняющее размещение объекта: сдвиг + поворот/отражение.
+
+    ``rel_r``/``rel_c`` — координаты ячеек объекта относительно его bbox.
+    Возвращает плоские индексы размещения или ``None``, если выпавшая позиция
+    задевает недопустимые ячейки (``valid_flat`` == False) — вызывающий код
+    просто пробует ещё раз.
+    """
+    n_rows, n_cols = shape
+    h, w = int(rel_r.max()) + 1, int(rel_c.max()) + 1
+    t = int(rng.integers(8))            # 8 элементов группы диэдра: повороты/отражения
+    if t == 0:
+        rr, cc = rel_r, rel_c
+    elif t == 1:
+        rr, cc = rel_r, w - 1 - rel_c
+    elif t == 2:
+        rr, cc = h - 1 - rel_r, rel_c
+    elif t == 3:
+        rr, cc = h - 1 - rel_r, w - 1 - rel_c
+    elif t == 4:
+        rr, cc = rel_c, rel_r
+    elif t == 5:
+        rr, cc = rel_c, h - 1 - rel_r
+    elif t == 6:
+        rr, cc = w - 1 - rel_c, rel_r
+    else:
+        rr, cc = w - 1 - rel_c, h - 1 - rel_r
+    hh, ww = int(rr.max()) + 1, int(cc.max()) + 1
+    if hh > n_rows or ww > n_cols:
+        return None
+    row0 = int(rng.integers(n_rows - hh + 1))
+    col0 = int(rng.integers(n_cols - ww + 1))
+    idx = (rr + row0) * n_cols + (cc + col0)
+    return idx if valid_flat[idx].all() else None
+
+
 def permutation_significance(
     score_all: np.ndarray,
     held_idx: np.ndarray,
@@ -202,38 +241,90 @@ def permutation_significance(
     n_perm: int | None = None,
     seed: int | None = None,
     eval_pool: np.ndarray | None = None,
+    shape: tuple[int, int] | None = None,
+    placement_mask: np.ndarray | None = None,
 ) -> dict[str, float]:
     """Значим ли захват held-out объекта по сравнению со случайным участком той же площади.
 
     Нулевая гипотеза: модель, обученная на двух объектах, не выделяет held-out
-    объект среди прочих непройденных ячеек. Пул перестановок — ``eval_pool``
-    (контрольный объект + чистый фон вне обучения, см.
-    :func:`leave_one_object_out`); без него — все ячейки вне обучения, включая
-    ``-1`` и буферные ячейки обучающих объектов (устаревший режим, оставлен для
-    обратной совместимости). ``p_value`` — доля нулевых прогонов с lift
-    ≥ наблюдаемого (значимо при p < 0.05); при ``CRIT_N_OBJECTS == 3`` мощность
-    теста ограничена малым n — трактовать как индикативную, не как строгое
-    статистическое доказательство. При наблюдаемом lift = 0 значение p = 1
-    вырождено и означает «объект не захвачен», а не результат теста.
+    объект среди прочих непройденных ячеек. Порог top-``area`` — по ``eval_pool``
+    (контрольный объект + чистый фон вне обучения, см. :func:`leave_one_object_out`).
+
+    Null-распределение: при заданном ``shape`` (форма сетки, ``(prf, pic)``) —
+    форм-сохраняющие размещения контура held-out объекта (случайный сдвиг +
+    поворот/отражение) по ячейкам ``placement_mask``. Разрозненные случайные
+    ячейки (режим без ``shape``, оставлен для обратной совместимости) занижают
+    дисперсию null: у компактного автокоррелированного пятна разброс coverage
+    много больше, чем у независимых ячеек, — тест выходит антиконсервативным.
+
+    ``p_value`` — со сглаживанием ``(1 + #{null >= obs}) / (1 + n_perm)``
+    (Phipson & Smyth), поэтому p = 0.000 невозможен по построению. При
+    наблюдаемом lift = 0 значение p ~ 1 вырождено и означает «объект не
+    захвачен», а не результат теста. При ``CRIT_N_OBJECTS == 3`` мощность
+    ограничена малым n — трактовать индикативно.
     """
     area = config.CRIT_PERM_AREA if area is None else area
     n_perm = config.CRIT_PERM_N if n_perm is None else n_perm
     seed = config.CRIT_SEED if seed is None else seed
 
-    pool = np.setdiff1d(np.arange(len(score_all)), train_idx) if eval_pool is None else eval_pool
     observed = _coverage(score_all, held_idx, area, pool=eval_pool) / area
-
     rng = np.random.default_rng(seed)
-    n = len(held_idx)
-    null = np.array([
-        _coverage(score_all, rng.choice(pool, size=n, replace=False), area, pool=eval_pool) / area
-        for _ in range(n_perm)
-    ])
+
+    extra: dict[str, float] = {}
+    if shape is not None:
+        rows, cols = np.divmod(held_idx, shape[1])
+        rel_r, rel_c = rows - rows.min(), cols - cols.min()
+        valid = (
+            np.ones(score_all.size, dtype=bool) if placement_mask is None else placement_mask
+        )
+        in_pool = None
+        if eval_pool is not None:
+            in_pool = np.zeros(score_all.size, dtype=bool)
+            in_pool[eval_pool] = True
+        null_list: list[float] = []
+        unique_placements: set[bytes] = set()
+        n_attempts = 0
+        for _ in range(n_perm * 200):
+            if len(null_list) >= n_perm:
+                break
+            n_attempts += 1
+            idx = _random_object_placement(rel_r, rel_c, shape, valid, rng)
+            if idx is None:
+                continue
+            # coverage нуля — только по ячейкам eval-пула: у наблюдаемого объекта
+            # весь контур в пуле, а размещение может задеть train-фоновые ячейки
+            # с прижатым обучением скором — иначе null разбавлен заведомыми
+            # промахами и тест антиконсервативен
+            eval_idx = idx if in_pool is None else idx[in_pool[idx]]
+            if eval_idx.size < max(1, idx.size // 2):
+                continue                      # контур лёг в основном мимо пула — неинформативен
+            unique_placements.add(np.sort(idx).tobytes())
+            null_list.append(_coverage(score_all, eval_idx, area, pool=eval_pool) / area)
+        if len(null_list) < n_perm:
+            raise ValueError(
+                f"Удалось разместить контур объекта только {len(null_list)} раз из "
+                f"{n_perm} — placement_mask слишком тесная для формы объекта"
+            )
+        null = np.array(null_list)
+        # доля принятых попыток и уникальность размещений: при тесной маске
+        # повторы снижают фактическое разрешение p-value ниже номинального
+        extra = {
+            "placement_accept_rate": float(len(null_list) / n_attempts),
+            "n_unique_placements": float(len(unique_placements)),
+        }
+    else:
+        pool = np.setdiff1d(np.arange(len(score_all)), train_idx) if eval_pool is None else eval_pool
+        n = len(held_idx)
+        null = np.array([
+            _coverage(score_all, rng.choice(pool, size=n, replace=False), area, pool=eval_pool) / area
+            for _ in range(n_perm)
+        ])
     return {
         "observed_lift": float(observed),
         "null_mean": float(null.mean()),
         "null_q95": float(np.quantile(null, 0.95)),
-        "p_value": float((null >= observed).mean()),
+        "p_value": float((1 + (null >= observed).sum()) / (1 + null.size)),
+        **extra,
     }
 
 
@@ -244,15 +335,20 @@ def run_leave_one_object_out_cv(seed: int | None = None) -> tuple[pd.DataFrame, 
     по объектам и площадям, сырые результаты LOO (для :func:`real_point_verification`)
     и таблицу значимости по объектам.
     """
-    X, labels_flat, coords, _feature_names, _meta = build_dataset()
+    X, labels_flat, coords, _feature_names, meta = build_dataset()
     loo_results = leave_one_object_out(X, labels_flat, coords, seed=seed)
 
     perm_rows = []
     for r in loo_results:
+        obj = r["summary"]["object"]
+        # размещать контур можно по чистому фону и месту самого объекта;
+        # обучающие объекты и -1-ячейки для null-размещений закрыты
+        placement_mask = (labels_flat == 0) | (labels_flat == obj)
         perm = permutation_significance(
-            r["score_all"], r["held_idx"], r["train_idx"], seed=seed, eval_pool=r["eval_pool"],
+            r["score_all"], r["held_idx"], r["train_idx"], seed=seed,
+            eval_pool=r["eval_pool"], shape=(meta.prf, meta.pic), placement_mask=placement_mask,
         )
-        perm["object"] = r["summary"]["object"]
+        perm["object"] = obj
         perm_rows.append(perm)
 
     summary_df = pd.DataFrame([r["summary"] for r in loo_results])

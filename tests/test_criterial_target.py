@@ -53,6 +53,18 @@ def test_exclude_factor_features_kept_minimal():
         assert f in excl
 
 
+def test_coverage_pool_excludes_train_budget():
+    from src.validation import _coverage
+
+    score = np.array([1.0, 0.9, 0.8, 0.2, 0.15, 0.1, 0.05, 0.0, 0.3, 0.25])
+    held = np.array([8, 9])
+    # порог по всей сетке: top-30% съедают «обучающие» ячейки 0-2, held мимо
+    assert _coverage(score, held, 0.3) == 0.0
+    # порог по eval-пулу (без ячеек 0-2): held — лучшие в пуле, полный захват
+    pool = np.arange(3, 10)
+    assert _coverage(score, held, 0.3, pool=pool) == 1.0
+
+
 def test_permutation_significance_shape():
     rng = np.random.default_rng(0)
     n = 200
@@ -111,6 +123,11 @@ def test_loo_train_sets_are_clean(monkeypatch):
         assert pos.size > 0
         if pos.size < r["summary"]["n_train_pos_total"]:
             buffer_removed_any = True
+        # eval-пул: только контрольный объект + чистый фон, без обучающих ячеек
+        ep = r["eval_pool"]
+        assert np.intersect1d(ep, train_idx).size == 0
+        assert set(np.unique(labels_flat[ep])) <= {0, r["summary"]["object"]}
+        assert np.isin(r["held_idx"], ep).all()
     # буфер нетривиален: хотя бы в одном фолде он реально вырезал обучающие ячейки
     # (на датасете v1 объекты 1 и 3 лежат ближе буфера друг к другу)
     assert buffer_removed_any

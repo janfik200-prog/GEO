@@ -52,9 +52,20 @@ def assign_spatial_blocks(grid: gpd.GeoDataFrame, block_size: int) -> np.ndarray
     return bx * (by.max() + 1) + by
 
 
-def _coverage(score_all: np.ndarray, test_positions: np.ndarray, area: float) -> float:
-    """Доля held-out точек, попавших в top-``area`` ячеек по ``score_all``."""
-    thr = np.quantile(score_all, 1.0 - area)
+def _coverage(
+    score_all: np.ndarray, test_positions: np.ndarray, area: float,
+    pool: np.ndarray | None = None,
+) -> float:
+    """Доля held-out точек, попавших в top-``area`` ячеек по ``score_all``.
+
+    ``pool`` — индексы ячеек, по которым считается порог top-``area`` (eval-пул):
+    порог по всей сетке включает обучающие положительные ячейки, которые съедают
+    бюджет top-X% по-разному в разных фолдах и делают фолды несравнимыми.
+    По умолчанию (``None``) — вся сетка, как в блочной CV на реальных точках,
+    где обучающие ячейки при прогнозе не исключаются.
+    """
+    ref = score_all if pool is None else score_all[pool]
+    thr = np.quantile(ref, 1.0 - area)
     return float((score_all[test_positions] >= thr).mean())
 
 

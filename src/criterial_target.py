@@ -120,9 +120,15 @@ def leave_one_object_out(
     контроля и завышает lift). Тот же буфер применяется и к обучающим
     положительным ячейкам — ячейки обучающих объектов ближе буфера к контролю
     исключаются, чтобы модель не выучивала окрестность контроля напрямую.
+    Метрики coverage/lift считаются по eval-пулу (контрольный объект + чистый
+    фон вне обучающей выборки), а не по всей сетке: порог top-X% по всей сетке
+    включает обучающие объекты и ``-1``-ячейки, которые съедают бюджет top-X%
+    по-разному в разных фолдах и делают фолды несравнимыми.
+
     Возвращает список словарей по каждому объекту: сводка метрик (``summary``),
-    прогноз по всей сетке (``score_all``), позиции held-out ячеек (``held_idx``)
-    и индексы, использованные для обучения (``train_idx``, для permutation-теста).
+    прогноз по всей сетке (``score_all``), позиции held-out ячеек (``held_idx``),
+    индексы обучения (``train_idx``) и eval-пул (``eval_pool``) — оба нужны
+    permutation-тесту.
     """
     seed = config.CRIT_SEED if seed is None else seed
     all_idx = np.arange(len(labels_flat))
@@ -158,6 +164,11 @@ def leave_one_object_out(
         model.fit(X[train_idx], y)
         score_all = model.predict_proba(X)[:, 1]
 
+        # eval-пул: контрольный объект + чистый фон, не участвовавший в обучении
+        in_train = np.zeros(labels_flat.size, dtype=bool)
+        in_train[train_idx] = True
+        eval_pool = all_idx[((labels_flat == obj) | (labels_flat == 0)) & ~in_train]
+
         summary = {
             "object": obj,
             "n_cells": int(held_idx.size),
@@ -166,9 +177,10 @@ def leave_one_object_out(
             "n_bg_candidates": int(bg_candidates.size),
             "n_perspective_excluded": int((labels_flat == -1).sum()),
             "n_background": int(bg_idx.size),
+            "n_eval_pool": int(eval_pool.size),
         }
         for area in config.CRIT_AREAS:
-            cov = _coverage(score_all, held_idx, area)
+            cov = _coverage(score_all, held_idx, area, pool=eval_pool)
             summary[f"coverage@{int(round(area * 100))}%"] = cov
             summary[f"lift@{int(round(area * 100))}%"] = cov / area
 
@@ -177,6 +189,7 @@ def leave_one_object_out(
             "score_all": score_all,
             "held_idx": held_idx,
             "train_idx": train_idx,
+            "eval_pool": eval_pool,
         })
     return results
 
@@ -188,28 +201,32 @@ def permutation_significance(
     area: float | None = None,
     n_perm: int | None = None,
     seed: int | None = None,
+    eval_pool: np.ndarray | None = None,
 ) -> dict[str, float]:
     """Значим ли захват held-out объекта по сравнению со случайным участком той же площади.
 
     Нулевая гипотеза: модель, обученная на двух объектах, не выделяет held-out
-    объект среди прочих непройденных ячеек. Пул перестановок — все ячейки, не
-    участвовавшие в обучении (фон + held-out), чтобы не завышать значимость
-    подмешиванием обучающих точек. ``p_value`` — доля нулевых прогонов с lift
+    объект среди прочих непройденных ячеек. Пул перестановок — ``eval_pool``
+    (контрольный объект + чистый фон вне обучения, см.
+    :func:`leave_one_object_out`); без него — все ячейки вне обучения, включая
+    ``-1`` и буферные ячейки обучающих объектов (устаревший режим, оставлен для
+    обратной совместимости). ``p_value`` — доля нулевых прогонов с lift
     ≥ наблюдаемого (значимо при p < 0.05); при ``CRIT_N_OBJECTS == 3`` мощность
     теста ограничена малым n — трактовать как индикативную, не как строгое
-    статистическое доказательство.
+    статистическое доказательство. При наблюдаемом lift = 0 значение p = 1
+    вырождено и означает «объект не захвачен», а не результат теста.
     """
     area = config.CRIT_PERM_AREA if area is None else area
     n_perm = config.CRIT_PERM_N if n_perm is None else n_perm
     seed = config.CRIT_SEED if seed is None else seed
 
-    pool = np.setdiff1d(np.arange(len(score_all)), train_idx)
-    observed = _coverage(score_all, held_idx, area) / area
+    pool = np.setdiff1d(np.arange(len(score_all)), train_idx) if eval_pool is None else eval_pool
+    observed = _coverage(score_all, held_idx, area, pool=eval_pool) / area
 
     rng = np.random.default_rng(seed)
     n = len(held_idx)
     null = np.array([
-        _coverage(score_all, rng.choice(pool, size=n, replace=False), area) / area
+        _coverage(score_all, rng.choice(pool, size=n, replace=False), area, pool=eval_pool) / area
         for _ in range(n_perm)
     ])
     return {
@@ -232,7 +249,9 @@ def run_leave_one_object_out_cv(seed: int | None = None) -> tuple[pd.DataFrame, 
 
     perm_rows = []
     for r in loo_results:
-        perm = permutation_significance(r["score_all"], r["held_idx"], r["train_idx"], seed=seed)
+        perm = permutation_significance(
+            r["score_all"], r["held_idx"], r["train_idx"], seed=seed, eval_pool=r["eval_pool"],
+        )
         perm["object"] = r["summary"]["object"]
         perm_rows.append(perm)
 

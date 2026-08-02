@@ -23,7 +23,12 @@ _COORD_COLS = ("row", "col", "x", "y")
 def feature_columns(df: pd.DataFrame) -> list[str]:
     """Независимые признаки датасета: без координат, служебных, стоп-листа
     и факторных слоёв критериального анализа (те исключены из всей фазы
-    «собственный алгоритм» по той же причине циркулярности, что и в LOO)."""
+    «собственный алгоритм» по той же причине циркулярности, что и в LOO).
+
+    Используется МАСКОЙ (учёт доли пропусков). Список признаков лестницы
+    нетипичности — :func:`src.features_v11.ladder_features` (single source
+    of truth фазы): он берёт этот набор за базу, но чистит избыточные
+    градиентные колонки и заменяет сырые каналы Landsat отношениями."""
     drop = (set(_COORD_COLS) | set(config.GOLD_FEATURES_AUX)
             | set(config.GOLD_FEATURES_STOP) | set(config.CRIT_EXCLUDE_FACTOR_FEATURES))
     return [c for c in df.columns if c not in drop]

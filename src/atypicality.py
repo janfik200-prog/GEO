@@ -43,10 +43,12 @@ def prepare_matrix(feat_df: pd.DataFrame, valid: np.ndarray) -> np.ndarray:
     """
     X = feat_df.to_numpy(dtype=float)[valid]
     med = np.nanmedian(X, axis=0)
+    # IQR — ДО импутации (nanpercentile): импутированные медианой значения
+    # сжимали бы IQR и раздували масштаб колонок с большим числом пропусков.
+    q75, q25 = np.nanpercentile(X, [75, 25], axis=0)
+    iqr = np.where(q75 - q25 > 0, q75 - q25, 1.0)
     idx = np.where(np.isnan(X))
     X[idx] = np.take(med, idx[1])
-    q75, q25 = np.percentile(X, [75, 25], axis=0)
-    iqr = np.where(q75 - q25 > 0, q75 - q25, 1.0)
     return (X - med) / iqr
 
 
@@ -104,24 +106,38 @@ def ocsvm_score(X: np.ndarray, seed: int | None = None) -> np.ndarray:
     return -svm.score_samples(X)
 
 
-def shallow_ae_score(X: np.ndarray, seed: int | None = None) -> np.ndarray:
+def shallow_ae_score(
+    X: np.ndarray, seed: int | None = None, return_info: bool = False,
+) -> np.ndarray | tuple[np.ndarray, dict]:
     """Ступень 4: невязка неглубокого автоэнкодера (16-bottleneck-16).
 
     Узкое горлышко (``ANOM_AE_BOTTLENECK`` = 2-5) обязательно: широкое
     выучивает тождественное отображение, и невязка вырождается в шум.
+
+    Против недообучения (в v1 lift 0.41 — хуже случайного): вход клипуется
+    до ±``ANOM_CLIP_Z`` робастных единиц (хвосты не рвут градиенты) перед fit
+    И predict; ``early_stopping=False`` — валидационный сплит 10% на
+    мультивыходной регрессии рвал обучение на первых итерациях;
+    ``tol=ANOM_AE_TOL``. При ``return_info=True`` возвращает также
+    ``{"n_iter": ...}`` для диагностики сходимости.
     """
     from sklearn.neural_network import MLPRegressor
 
+    Xc = np.clip(X, -config.ANOM_CLIP_Z, config.ANOM_CLIP_Z)
     ae = MLPRegressor(
         hidden_layer_sizes=(config.ANOM_AE_HIDDEN, config.ANOM_AE_BOTTLENECK,
                             config.ANOM_AE_HIDDEN),
         activation="tanh",
         max_iter=config.ANOM_AE_MAX_ITER,
+        tol=config.ANOM_AE_TOL,
         random_state=config.ANOM_SEED if seed is None else seed,
-        early_stopping=True,
+        early_stopping=False,
     )
-    ae.fit(X, X)
-    return ((X - ae.predict(X)) ** 2).mean(axis=1)
+    ae.fit(Xc, Xc)
+    score = ((Xc - ae.predict(Xc)) ** 2).mean(axis=1)
+    if return_info:
+        return score, {"n_iter": int(ae.n_iter_)}
+    return score
 
 
 def rank_ensemble(scores: dict[str, np.ndarray]) -> np.ndarray:
@@ -153,6 +169,27 @@ def per_domain(fn, X: np.ndarray, domains: np.ndarray, **kwargs) -> np.ndarray:
         s = fn(X[sel], **kwargs)
         out[sel] = stats.rankdata(s) / sel.sum()
     return out
+
+
+def feature_contributions(
+    X: np.ndarray, score: np.ndarray, feature_names: list[str],
+    top_frac: float = 0.10,
+) -> pd.DataFrame:
+    """Какие признаки гонят аномальность: |Δмедиан| робастных z top vs остальные.
+
+    Для ячеек из top-``top_frac`` скора против остальных считается модуль
+    разницы медианных робастных z-значений по каждому признаку (вход ``X`` —
+    матрица после :func:`prepare_matrix`). Сортировка по убыванию. Это
+    артефакт-детектор: если топ тянут каналы Landsat/края покрытия, а не
+    геофизика — карта ловит артефакты съёмки, а не геологию.
+    """
+    score = np.asarray(score, dtype=float)
+    thr = np.quantile(score, 1.0 - top_frac)
+    top = score >= thr
+    diff = np.abs(np.median(X[top], axis=0) - np.median(X[~top], axis=0))
+    out = pd.DataFrame({"feature": list(feature_names), "abs_dz": diff,
+                        "n_top": int(top.sum())})
+    return out.sort_values("abs_dz", ascending=False).reset_index(drop=True)
 
 
 def expand_to_grid(score_valid: np.ndarray, valid: np.ndarray) -> np.ndarray:

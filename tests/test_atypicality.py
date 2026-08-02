@@ -76,6 +76,33 @@ def test_prepare_matrix_imputes_median_and_scales():
     assert abs(X[3, 0]) < 1e-9
 
 
+def test_prepare_matrix_iqr_before_imputation():
+    # IQR считается ДО импутации: медианные вставки не сжимают масштаб
+    df = pd.DataFrame({"a": [0.0, 10.0, np.nan, np.nan],
+                       "b": [1.0, 2.0, 3.0, 4.0]})
+    valid = np.ones(4, dtype=bool)
+    X = atypicality.prepare_matrix(df, valid)
+    # nanIQR колонки a = 5 (по [0, 10]); после импутации был бы 2.5 -> X[1,0]=2
+    assert abs(X[1, 0] - 1.0) < 1e-9
+    assert abs(X[2, 0]) < 1e-9              # импутированная медиана -> 0
+
+
+def test_feature_contributions_finds_planted_feature():
+    rng = np.random.default_rng(3)
+    X = rng.normal(size=(400, 5))
+    names = [f"f{i}" for i in range(5)]
+    score = X[:, 2] + rng.normal(scale=0.05, size=400)   # аномальность гонит f2
+    contrib = atypicality.feature_contributions(X, score, names, top_frac=0.10)
+    assert contrib.loc[0, "feature"] == "f2"
+    assert (contrib["abs_dz"].to_numpy()[:-1] >= contrib["abs_dz"].to_numpy()[1:]).all()
+
+
+def test_shallow_ae_return_info_n_iter(toy):
+    score, info = atypicality.shallow_ae_score(toy, return_info=True)
+    assert score.shape == (N,)
+    assert info["n_iter"] >= 1
+
+
 def test_expand_to_grid_keeps_invalid_out_of_top():
     valid = np.array([True, False, True])
     full = atypicality.expand_to_grid(np.array([0.5, 0.9]), valid)

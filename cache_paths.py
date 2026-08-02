@@ -19,6 +19,7 @@ ANABAR_DEM = CACHE / "anabar_dem"
 CMMI = CACHE / "cmmi"
 CMMI_AU = CACHE / "cmmi_au"
 CMMI_OCC = CMMI / "cmmi_occ.csv"
+S2_ANABAR = CACHE / "s2_anabar"
 
-for _p in (NURE, MRDS_CSV.parent, WORLD_GEO, ANABAR_GEO, ANABAR_DEM, CMMI, CMMI_AU):
+for _p in (NURE, MRDS_CSV.parent, WORLD_GEO, ANABAR_GEO, ANABAR_DEM, CMMI, CMMI_AU, S2_ANABAR):
     _p.mkdir(parents=True, exist_ok=True)

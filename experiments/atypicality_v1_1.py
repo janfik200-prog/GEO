@@ -49,6 +49,12 @@ LADDER = [
     ("isoforest", atypicality.isoforest_score),
     ("ocsvm", atypicality.ocsvm_score),
     ("shallow_ae", atypicality.shallow_ae_score),
+    # Добавлены после теста мощности: три других семейства (локальная плотность,
+    # расстояние до k-го соседа, смесь гауссиан). Ключевой параметр — масштаб
+    # соседства k > размера рудного узла, см. ANOM_LOF_K.
+    ("lof", atypicality.lof_score),
+    ("knn_dist", atypicality.knn_distance_score),
+    ("gmm_nll", atypicality.gmm_nll_score),
 ]
 SEED_SWEEP_FNS = [("mahalanobis", atypicality.robust_mahalanobis),
                   ("isoforest", atypicality.isoforest_score),

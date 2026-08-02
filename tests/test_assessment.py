@@ -1,4 +1,5 @@
-"""Тесты src/assessment.py: P-A метрики, бутстрэп, планки, карта расхождений."""
+"""Тесты src/assessment.py: P-A метрики, бутстрэп, планки, карта расхождений,
+строгий дедуп точек, кластеры, realized_area, сдвиговый null."""
 import numpy as np
 import pandas as pd
 
@@ -93,3 +94,88 @@ def test_spearman_maps_extremes():
     x = np.linspace(0, 1, 200)
     assert assessment.spearman_maps(x, x * 2 + 1) == 1.0
     assert assessment.spearman_maps(x, -x) == -1.0
+
+
+# --------------------------------------------------------------------------
+# Строгий дедуп, кластеры, realized_area, сдвиговый null (пункт 13)
+# --------------------------------------------------------------------------
+
+def _toy_meta(prf=10, pic=100):
+    from src.integro_grid import GridMeta
+    return GridMeta(obj_count=prf * pic, prop_count=0, pic=pic, prf=prf,
+                    dx=500.0, dy=500.0, x0=0.0, y0=0.0)
+
+
+def test_aggregate_point_cells_strict_dedup():
+    # ячейка 5: коды {1, 2} — НЕ несмещённая (есть рыхлая проба);
+    # ячейка 7: только код 2 — строго несмещённая; ячейка 9: только код 5 — нет
+    out = assessment.aggregate_point_cells(
+        np.array([5, 5, 7, 9]), np.array([1, 2, 2, 5]))
+    out = out.set_index("cell")
+    assert not out.loc[5, "unbiased_strict"]
+    assert out.loc[5, "code"] == 2          # приоритетный код сохранён для карт
+    assert out.loc[7, "unbiased_strict"]
+    assert not out.loc[9, "unbiased_strict"]
+    np.testing.assert_array_equal(
+        assessment.unbiased_cells(out.reset_index()), [7])
+
+
+def test_point_clusters_single_linkage():
+    meta = _toy_meta()
+    # ячейки 0,1,2 — соседние (500 м < 2000 м), ячейка 50 — в 24 км
+    labels = assessment.point_clusters(np.array([0, 1, 2, 50]), meta)
+    assert labels[0] == labels[1] == labels[2]
+    assert labels[3] != labels[0]
+    assert len(np.unique(labels)) == 2
+    # вырожденный случай: одна точка — один кластер
+    assert assessment.point_clusters(np.array([3]), meta).size == 1
+
+
+def test_bootstrap_diff_cluster_resampling():
+    score, points = _score_with_top_points()
+    clusters = np.repeat([1, 2], points.size // 2)
+    res = assessment.bootstrap_diff(score, score.copy(), points,
+                                    n_boot=100, seed=0, clusters=clusters)
+    assert res["delta"] == 0.0
+    assert res["ci_lo"] <= 0.0 <= res["ci_hi"]
+    # кластерный ДИ доминирующего метода шире не делает вывод ложным
+    res2 = assessment.bootstrap_diff(score, score[::-1].copy(), points,
+                                     n_boot=100, seed=0, clusters=clusters)
+    assert res2["delta"] > 0
+
+
+def test_coverage_and_area_constant_score_ties():
+    # константный скор: порог накрывает 100% пула -> realized_area=1, lift=1
+    score = np.ones(100)
+    cov, realized = assessment.coverage_and_area(score, np.array([0, 5]), 0.10)
+    assert cov == 1.0 and realized == 1.0
+    assert assessment.capture_efficiency(score, np.array([0, 5]), 0.10) == 1.0
+    pa = assessment.pa_curve(score, np.array([0, 5]), areas=(0.10,))
+    assert pa.loc[0, "lift"] == 1.0 and pa.loc[0, "realized_area"] == 1.0
+
+
+def test_spatial_null_p_in_unit_interval_and_degenerate():
+    meta = _toy_meta(prf=20, pic=30)
+    rng = np.random.default_rng(0)
+    score = rng.random(meta.prf * meta.pic)
+    points = rng.choice(score.size, size=5, replace=False)
+    res = assessment.spatial_null_pvalue(score, points, meta,
+                                         area=0.10, n_shifts=99, seed=1)
+    assert 0.0 < res["p"] <= 1.0
+    # точки в самом низу скора: observed lift = 0 -> p = 1 (вырожденно)
+    order = np.argsort(score)
+    res0 = assessment.spatial_null_pvalue(score, order[:5], meta,
+                                          area=0.10, n_shifts=99, seed=1)
+    assert res0["observed"] == 0.0 and res0["p"] == 1.0
+
+
+def test_spatial_null_detects_true_signal():
+    meta = _toy_meta(prf=30, pic=40)
+    rng = np.random.default_rng(2)
+    score = rng.random(meta.prf * meta.pic) * 0.01
+    points = np.array([100, 500, 900])
+    score[points] = 10.0                      # карта пикует ровно на точках
+    res = assessment.spatial_null_pvalue(score, points, meta,
+                                         area=0.10, n_shifts=200, seed=3)
+    assert res["p"] < 0.05
+    assert res["observed"] > res["null_q95"]

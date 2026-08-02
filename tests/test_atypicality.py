@@ -33,6 +33,9 @@ def _top_share(score, k=N_OUT):
     atypicality.pca_residual,
     atypicality.isoforest_score,
     atypicality.ocsvm_score,
+    atypicality.lof_score,
+    atypicality.knn_distance_score,
+    atypicality.gmm_nll_score,
 ])
 def test_each_rung_ranks_outliers_top(toy, fn):
     assert _top_share(fn(toy)) >= 0.9

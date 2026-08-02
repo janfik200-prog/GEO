@@ -140,6 +140,57 @@ def shallow_ae_score(
     return score
 
 
+def lof_score(X: np.ndarray, k: int | None = None) -> np.ndarray:
+    """Локальная плотность (LOF): аномален тот, кто разрежённее своих соседей.
+
+    Другое семейство, чем ступени 1-4: не «далеко от центра фона», а «локально
+    менее плотно, чем окружение». Нужен для проверки, не является ли
+    отрицательный результат артефактом одного семейства детекторов.
+    """
+    from sklearn.neighbors import LocalOutlierFactor
+
+    lof = LocalOutlierFactor(n_neighbors=k or config.ANOM_LOF_K, n_jobs=-1)
+    lof.fit(X)
+    return -lof.negative_outlier_factor_
+
+
+def knn_distance_score(X: np.ndarray, k: int | None = None) -> np.ndarray:
+    """Расстояние до k-го ближайшего соседа — простейшая мера разрежённости.
+
+    Непараметрическая планка внутри лестницы: если сложные детекторы не бьют
+    её, вся сложность не оправдана.
+    """
+    from sklearn.neighbors import NearestNeighbors
+
+    k = k or config.ANOM_KNN_K
+    nn = NearestNeighbors(n_neighbors=k + 1, n_jobs=-1).fit(X)
+    dist, _ = nn.kneighbors(X)
+    return dist[:, -1]
+
+
+def gmm_nll_score(X: np.ndarray, seed: int | None = None,
+                  n_components: int | None = None) -> np.ndarray:
+    """Минус лог-правдоподобие смеси гауссиан (многомодальный фон).
+
+    Махаланобис предполагает ОДИН эллипсоид фона; при нескольких геологических
+    доменах (свиты) это заведомо грубо. Смесь описывает такой фон явно.
+
+    Смесь чувствительна к загрязнению: свободная компонента охотно садится на
+    компактную группу выбросов и делает её «нормой». Против этого — пол
+    ковариации ``ANOM_GMM_REG``.
+    """
+    from sklearn.mixture import GaussianMixture
+
+    gmm = GaussianMixture(
+        n_components=n_components or config.ANOM_GMM_COMPONENTS,
+        covariance_type="full",
+        reg_covar=config.ANOM_GMM_REG,
+        random_state=config.ANOM_SEED if seed is None else seed,
+    )
+    gmm.fit(X)
+    return -gmm.score_samples(X)
+
+
 def rank_ensemble(scores: dict[str, np.ndarray]) -> np.ndarray:
     """Ступень 5: средний нормированный ранг по ступеням-членам.
 

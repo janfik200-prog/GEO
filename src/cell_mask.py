@@ -19,6 +19,18 @@ from . import config
 # Колонки-координаты: не признаки, в учёте пропусков не участвуют.
 _COORD_COLS = ("row", "col", "x", "y")
 
+# Служебные колонки источников v2: число наблюдений и доля валидных пикселей
+# описывают качество съёмки, а не свойства площади.
+SERVICE_COLS: tuple[str, ...] = ("s2_n_obs", "s2_valid_frac", "mask_valid",
+                                 "domain_id")
+
+# Группы, добавленные в датасете v2. Маска фазы ФИКСИРОВАНА на признаках v1:
+# иначе площадь оценки менялась бы при каждом новом источнике и протокол
+# заверки этапа 1 стал бы несравним с этапами 4-7. Дыры в Sentinel-2 (облака,
+# край полосы) не должны выкидывать ячейку из площади — их лечит импутация
+# внутри детектора. Пул признаков лестницы v2 собирает src.features_v2.
+V2_SOURCE_PREFIXES: tuple[str, ...] = ("dem_", "lin_", "s2_", "ast_", "gamma_")
+
 
 def feature_columns(df: pd.DataFrame) -> list[str]:
     """Независимые признаки датасета: без координат, служебных, стоп-листа
@@ -29,9 +41,10 @@ def feature_columns(df: pd.DataFrame) -> list[str]:
     нетипичности — :func:`src.features_v11.ladder_features` (single source
     of truth фазы): он берёт этот набор за базу, но чистит избыточные
     градиентные колонки и заменяет сырые каналы Landsat отношениями."""
-    drop = (set(_COORD_COLS) | set(config.GOLD_FEATURES_AUX)
+    drop = (set(_COORD_COLS) | set(config.GOLD_FEATURES_AUX) | set(SERVICE_COLS)
             | set(config.GOLD_FEATURES_STOP) | set(config.CRIT_EXCLUDE_FACTOR_FEATURES))
-    return [c for c in df.columns if c not in drop]
+    return [c for c in df.columns
+            if c not in drop and not c.startswith(V2_SOURCE_PREFIXES)]
 
 
 def build_valid_mask(df: pd.DataFrame) -> np.ndarray:

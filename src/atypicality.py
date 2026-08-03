@@ -26,6 +26,8 @@
 """
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pandas as pd
 from scipy import stats
@@ -40,16 +42,29 @@ def prepare_matrix(feat_df: pd.DataFrame, valid: np.ndarray) -> np.ndarray:
     значению и не создаёт искусственной аномалии — для детекторов нетипичности
     это принципиально. Стандартизация робастная: медиана/IQR, чтобы сами
     аномалии не растягивали шкалу.
+
+    НУЛЬ-РАЗДУТЫЕ КОЛОНКИ. У признака, который равен нулю больше чем в 75%
+    ячеек (плотность узлов линеаментов), IQR вырождается до машинного нуля, и
+    деление на него давало z ~ 1e14: такая колонка в одиночку определяла и
+    расстояние Махаланобиса, и isoforest. Если IQR меньше 1% СКО (у нормального
+    распределения IQR ~ 1.35 СКО, так что порог срабатывает только на
+    вырождении), масштаб берётся по СКО, у полностью постоянных колонок — 1.
     """
     X = feat_df.to_numpy(dtype=float)[valid]
     med = np.nanmedian(X, axis=0)
     # IQR — ДО импутации (nanpercentile): импутированные медианой значения
     # сжимали бы IQR и раздували масштаб колонок с большим числом пропусков.
     q75, q25 = np.nanpercentile(X, [75, 25], axis=0)
-    iqr = np.where(q75 - q25 > 0, q75 - q25, 1.0)
+    iqr, sd = q75 - q25, np.nanstd(X, axis=0)
+    degenerate = ~(iqr > 0.01 * sd)
+    if degenerate.any():
+        names = np.asarray(feat_df.columns)[degenerate]
+        warnings.warn("вырожденный IQR, масштаб по СКО: " + ", ".join(names))
+    scale = np.where(degenerate, sd, iqr)
+    scale = np.where(np.isfinite(scale) & (scale > 0), scale, 1.0)
     idx = np.where(np.isnan(X))
     X[idx] = np.take(med, idx[1])
-    return (X - med) / iqr
+    return (X - med) / scale
 
 
 def robust_mahalanobis(X: np.ndarray, seed: int | None = None) -> np.ndarray:

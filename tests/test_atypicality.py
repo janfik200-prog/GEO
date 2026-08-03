@@ -90,6 +90,24 @@ def test_prepare_matrix_iqr_before_imputation():
     assert abs(X[2, 0]) < 1e-9              # импутированная медиана -> 0
 
 
+def test_prepare_matrix_does_not_explode_on_zero_inflated_column():
+    # Плотность узлов линеаментов: ноль в 90% ячеек -> IQR вырожден.
+    # До правки деление на IQR давало z ~ 1e14, и колонка одна определяла
+    # расстояние Махаланобиса.
+    rng = np.random.default_rng(11)
+    n = 500
+    sparse = np.zeros(n)
+    sparse[:50] = rng.uniform(1.0, 3.0, size=50)
+    df = pd.DataFrame({"lin_node_dens": sparse, "gm": rng.normal(size=n)})
+    valid = np.ones(n, dtype=bool)
+    with pytest.warns(UserWarning, match="IQR"):
+        X = atypicality.prepare_matrix(df, valid)
+    assert np.isfinite(X).all()
+    assert np.abs(X[:, 0]).max() < 20.0
+    # масштабы колонок сопоставимы: ни одна не задавит остальные в Махаланобисе
+    assert 0.05 < X[:, 0].std() / X[:, 1].std() < 20.0
+
+
 def test_feature_contributions_finds_planted_feature():
     rng = np.random.default_rng(3)
     X = rng.normal(size=(400, 5))

@@ -120,6 +120,11 @@ def main() -> None:
     POINT_SETS = [("all", all_cells, cl_all), ("unbiased_strict", unb, cl_unb)]
     log(f"точки: все {all_cells.size} ({np.unique(cl_all).size} кластеров), "
         f"несмещённые {unb.size} ({np.unique(cl_unb).size} кластеров)")
+    # Разрешение метрики: попадание ОДНОЙ точки меняет lift на этот шаг.
+    # При 19 точках шкала квантована с шагом 0.53 — разницы меньше шага
+    # обсуждать бессмысленно, как бы ни сравнивались методы.
+    log(f"шаг метрики: 1 точка = {1.0 / unb.size / config.VER_AREA:.2f} lift "
+        f"(несмещённые), {1.0 / all_cells.size / config.VER_AREA:.2f} (все)")
 
     def lift(score, cells=None):
         return assessment.capture_efficiency(score, unb if cells is None else cells,
@@ -138,7 +143,7 @@ def main() -> None:
 
     # --- Абляции по группам: «только группа» и «всё без группы» ---
     groups = [g for g in config.V2_FEATURE_GROUPS if g in sizes]
-    abl_rows = []
+    abl_rows, abl_scores = [], {}
     base_lift = {n: lift(scores[n]) for n, _ in LADDER}
     base_lift["rank_ensemble"] = lift(scores["rank_ensemble"])
     for g in groups:
@@ -155,6 +160,7 @@ def main() -> None:
                     "method": name, "lift": lift(sc[name]),
                     "lift_full_pool": base_lift[name],
                     "delta": lift(sc[name]) - base_lift[name]})
+            abl_scores[(g, mode)] = sc["rank_ensemble"]
             log(f"абляция {mode} {g} ({sub.shape[1]} призн.): "
                 f"ансамбль lift {lift(sc['rank_ensemble']):.2f} "
                 f"(полный пул {base_lift['rank_ensemble']:.2f})")
@@ -169,6 +175,17 @@ def main() -> None:
             r = assessment.spatial_null_pvalue(scores[name], cells, meta,
                                                pool=pool_valid)
             null_rows.append({"method": name, "points": pts_name, **r})
+    # Абляции проверяются сдвиговым null ВСЕ, а не только лучшая: лучшая
+    # выбрана по той же метрике, по которой оценивается, поэтому её p
+    # сравнивается с порогом Бонферрони 0.05/(число конфигураций), а не с 0.05.
+    n_cfg = max(1, len(abl_scores))
+    for (g, mode), sc in abl_scores.items():
+        r = assessment.spatial_null_pvalue(sc, unb, meta, pool=pool_valid)
+        null_rows.append({"method": f"rank_ensemble|{mode}_{g}",
+                          "points": "unbiased_strict", **r})
+    if abl_scores:
+        log(f"null по {n_cfg} абляциям готов; порог Бонферрони "
+            f"0.05/{n_cfg} = {0.05 / n_cfg:.4f}")
     null_df = pd.DataFrame(null_rows)
     log(f"сдвиговый null ({config.VER_N_SHIFTS} сдвигов) готов")
 

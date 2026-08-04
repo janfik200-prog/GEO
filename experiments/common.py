@@ -155,7 +155,9 @@ def criterial(Xtr, ytr, Xte):
     mu, sd = Xtr.mean(0), Xtr.std(0) + 1e-9
     Z1, Z2 = (Xtr - mu) / sd, (Xte - mu) / sd
     sg = np.sign([np.corrcoef(Z1[:, j], ytr)[0, 1] for j in range(Xtr.shape[1])])
-    return (Z2 * sg).mean(1)
+    # Постоянный в обучающем фолде столбец даёт корреляцию NaN; знак 0 = признак
+    # просто не участвует. Без этого NaN расползается на весь индекс.
+    return (Z2 * np.nan_to_num(sg, nan=0.0)).mean(1)
 
 
 def lift(score, y, a=0.10):

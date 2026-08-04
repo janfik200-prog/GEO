@@ -66,7 +66,13 @@ def run_ladder(X, valid, tag=""):
     return out
 
 
-def main() -> None:
+def main(include_factors: bool = False, stem_name: str = "atypicality_v2",
+         pool_name: str = "v2") -> None:
+    """Прогон протокола. ``include_factors`` переключает пул v2 -> v3.
+
+    Параметризация, а не копия файла: протокол заверки обязан быть побайтно
+    одним и тем же для обоих пулов, иначе сравнение v2 и v3 ничего не значит.
+    """
     t0 = time.time()
 
     def log(msg):
@@ -83,10 +89,10 @@ def main() -> None:
     log(f"датасет v2: {df.shape[0]} ячеек, {df.shape[1]} колонок; "
         f"валидных {int(valid.sum())}")
 
-    feat = features_v2.pool_features(df)
+    feat = features_v2.pool_features(df, include_factors=include_factors)
     sizes = features_v2.group_sizes(feat)
     cond = features_v2.condition_number(feat, valid)
-    log(f"пул v2: {feat.shape[1]} признаков {sizes}, cond={cond:.3g}")
+    log(f"пул {pool_name}: {feat.shape[1]} признаков {sizes}, cond={cond:.3g}")
     for col, why in features_v2.dropped_columns(df).items():
         log(f"  исключён {col}: {why}")
 
@@ -149,7 +155,8 @@ def main() -> None:
     for g in groups:
         for mode, keep in [("only", (g,)),
                            ("without", tuple(x for x in groups if x != g))]:
-            sub = features_v2.pool_features(df, groups=keep)
+            sub = features_v2.pool_features(df, groups=keep,
+                                            include_factors=include_factors)
             if sub.shape[1] < 2:
                 continue
             Xg = atypicality.prepare_matrix(sub, valid)
@@ -213,12 +220,21 @@ def main() -> None:
 
     out_dir = ROOT / "outputs"
     (out_dir / "metrics").mkdir(parents=True, exist_ok=True)
-    stem = out_dir / "metrics" / "atypicality_v2"
+    stem = out_dir / "metrics" / stem_name
     pa_df.to_csv(f"{stem}.csv", index=False)
     abl_df.to_csv(f"{stem}_abl.csv", index=False)
     null_df.to_csv(f"{stem}_null.csv", index=False)
     boot_df.to_csv(f"{stem}_boot.csv", index=False)
     contrib_df.to_csv(f"{stem}_contrib.csv", index=False)
+    # Карты ступеней нужны этапу 7: сравнение всех методов идёт по готовым
+    # картам на едином эталоне, а отсюда до сих пор уходили только таблицы —
+    # из-за чего вся лестница в общую таблицу попасть не могла.
+    own = [n for n, _ in LADDER] + ["rank_ensemble", "rank_ensemble|dom"]
+    # Имя пула входит в ключ: v2 и v3 гоняют одну и ту же лестницу, и без метки
+    # их карты в общей таблице этапа 7 стали бы неразличимы.
+    np.savez_compressed(
+        f"{stem}_scores.npz", valid=valid,
+        **{f"{pool_name}_{n}".replace("|", "_"): scores[n] for n in own})
 
     # --- Карта-панель ---
     plot_names = [n for n, _ in LADDER] + ["rank_ensemble", "rank_ensemble|dom",
@@ -239,10 +255,10 @@ def main() -> None:
     for ax in axes.ravel()[len(plot_names):]:
         ax.axis("off")
     axes.ravel()[0].legend(loc="lower left", fontsize=8)
-    fig.suptitle(f"Лестница нетипичности на датасете v2 ({feat.shape[1]} признаков): "
+    fig.suptitle(f"Лестница нетипичности, пул {pool_name} ({feat.shape[1]} признаков): "
                  "нормированные ранги, север сверху", y=1.0)
     fig.tight_layout()
-    fig.savefig(out_dir / "atypicality_v2_map.png", dpi=130, bbox_inches="tight")
+    fig.savefig(out_dir / f"{stem_name}_map.png", dpi=130, bbox_inches="tight")
 
     # --- График абляций ---
     if not abl_df.empty:
@@ -260,7 +276,7 @@ def main() -> None:
             ax.legend(fontsize=8)
         fig.suptitle("Абляции по группам признаков, ранговый ансамбль")
         fig.tight_layout()
-        fig.savefig(out_dir / "atypicality_v2_ablation.png", dpi=130,
+        fig.savefig(out_dir / f"{stem_name}_ablation.png", dpi=130,
                     bbox_inches="tight")
 
     # --- Сводка ---
@@ -281,7 +297,7 @@ def main() -> None:
     print(f"\nТоп-5 признаков-драйверов ({best}):")
     print(contrib_df[contrib_df["method"] == best].head(5)
           [["feature", "abs_dz"]].round(3).to_string(index=False))
-    log("сохранено: outputs/atypicality_v2*.png, outputs/metrics/atypicality_v2*.csv")
+    log(f"сохранено: outputs/{stem_name}*.png, outputs/metrics/{stem_name}*.csv")
 
 
 if __name__ == "__main__":

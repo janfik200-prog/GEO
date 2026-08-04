@@ -127,14 +127,21 @@ def test_ratio_sums_bands():
     assert sat_sources._ratio(comp, ("b05", "b07"), ("b06",))[0] == pytest.approx(2.0)
 
 
-def test_indices_reference_existing_bands():
-    """Каждый индекс обязан ссылаться на реально скачиваемый канал."""
-    for name, (num, den) in sat_sources.AST_INDICES.items():
+@pytest.mark.parametrize("registry,bands", [("AST_INDICES", "AST_BANDS"),
+                                            ("L8_RATIOS", "L8_BANDS")])
+def test_indices_reference_existing_bands(registry, bands):
+    """Индекс обязан ссылаться на реальный канал, а числитель — быть КОРТЕЖЕМ.
+
+    Строка вместо кортежа не ловится глазами и не роняет импорт: ``_ratio``
+    переберёт её по буквам и упадёт уже после скачивания всех сцен (так и
+    случилось на прогоне Landsat — KeyError 'r' спустя 19 минут закачки).
+    """
+    known = getattr(sat_sources, bands)
+    for name, (num, den) in getattr(sat_sources, registry).items():
+        assert isinstance(num, tuple) and isinstance(den, tuple), \
+            f"{name}: каналы должны быть кортежами, а не строкой"
         for b in num + den:
-            assert b in sat_sources.AST_BANDS, f"{name}: нет канала {b}"
-    for name, (num, den) in sat_sources.L8_RATIOS.items():
-        for b in (num, den):
-            assert b in sat_sources.L8_BANDS, f"{name}: нет канала {b}"
+            assert b in known, f"{name}: нет канала {b}"
 
 
 def test_sensor_registry_is_callable():

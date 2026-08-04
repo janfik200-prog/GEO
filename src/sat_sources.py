@@ -34,10 +34,12 @@ L8_BANDS: dict[str, tuple[str, int]] = {
     "nir08": ("nir08", 1), "swir16": ("swir16", 1), "swir22": ("swir22", 1),
     "lwir11": ("lwir11", 1),
 }
-L8_RATIOS: dict[str, tuple[str, str]] = {
-    "iron_ox": ("red", "blue"),        # оксиды железа
-    "ferrous": ("swir16", "nir08"),    # закисное железо
-    "clay": ("swir16", "swir22"),      # глинистые / Al-OH
+# Числитель и знаменатель — КОРТЕЖИ каналов (как у ASTER): формат общий, потому
+# что _ratio складывает каналы, а строка «red» при переборе даёт буквы.
+L8_RATIOS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "iron_ox": (("red",), ("blue",)),          # оксиды железа
+    "ferrous": (("swir16",), ("nir08",)),      # закисное железо
+    "clay": (("swir16",), ("swir22",)),        # глинистые / Al-OH
 }
 
 # --- ALOS PALSAR-2 годовая мозаика -----------------------------------------

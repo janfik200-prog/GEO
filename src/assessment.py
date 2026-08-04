@@ -270,6 +270,92 @@ def spatial_null_pvalue(
             "null_q95": float(np.quantile(null, 0.95)), "p": p}
 
 
+def bootstrap_diff_catch(
+    score_a: np.ndarray, score_b: np.ndarray, catchments: list,
+    area: float | None = None, pool: np.ndarray | None = None,
+    n_boot: int | None = None, seed: int | None = None,
+    clusters: np.ndarray | None = None, ci: tuple = (5.0, 95.0),
+) -> dict[str, float]:
+    """То же, что :func:`bootstrap_diff`, но единица ресэмплинга — водосбор.
+
+    Ресэмплируются целые водосборы (или их пространственные кластеры), карты
+    фиксированы. Интервал по умолчанию 90% — как в предзарегистрированном
+    критерии превосходства.
+    """
+    from src import catchments as _catch
+    area = area or config.VER_AREA
+    n_boot = n_boot or config.VER_N_BOOT
+    rng = np.random.default_rng(config.VER_SEED if seed is None else seed)
+    idx = np.arange(len(catchments))
+
+    if clusters is not None:
+        clusters = np.asarray(clusters)
+        if clusters.size != idx.size:
+            raise ValueError("bootstrap_diff_catch: clusters должен быть длины "
+                             "списка водосборов")
+        labels = np.unique(clusters)
+        members = {c: idx[clusters == c] for c in labels}
+
+        def resample():
+            chosen = rng.choice(labels, size=labels.size, replace=True)
+            return np.concatenate([members[c] for c in chosen])
+    else:
+        def resample():
+            return rng.choice(idx, size=idx.size, replace=True)
+
+    cap = _catch.catchment_capture
+    lift_a = cap(score_a, catchments, area, pool)
+    lift_b = cap(score_b, catchments, area, pool)
+    deltas = np.empty(n_boot)
+    for i in range(n_boot):
+        s = [catchments[j] for j in resample()]
+        deltas[i] = cap(score_a, s, area, pool) - cap(score_b, s, area, pool)
+    lo, hi = np.percentile(deltas, list(ci))
+    return {"lift_a": lift_a, "lift_b": lift_b, "delta": lift_a - lift_b,
+            "ci_lo": float(lo), "ci_hi": float(hi),
+            "share_delta_le_0": float((deltas <= 0).mean()), "n_boot": n_boot}
+
+
+def spatial_null_catch(
+    score: np.ndarray, catchments: list, meta: integro_grid.GridMeta,
+    area: float | None = None, pool: np.ndarray | None = None,
+    n_shifts: int | None = None, seed: int | None = None,
+) -> dict[str, float]:
+    """Сдвиговый null для водосборной метрики: двигается карта, не водосборы.
+
+    Как и в точечном варианте, тороидальный сдвиг с отражениями сохраняет
+    пространственную автокорреляцию карты — то есть null отвечает на вопрос
+    «а не даёт ли такой результат любая карта с такой же зернистостью?».
+    """
+    from src import catchments as _catch
+    area = area or config.VER_AREA
+    n_shifts = n_shifts or config.VER_N_SHIFTS
+    rng = np.random.default_rng(config.VER_SEED if seed is None else seed)
+
+    img = np.asarray(score, dtype=float).copy()
+    img[~np.isfinite(img)] = np.nan
+    img = img.reshape(meta.prf, meta.pic)
+
+    def cap_of(flat):
+        f = np.where(np.isnan(flat), -np.inf, flat)
+        return _catch.catchment_capture(f, catchments, area, pool)
+
+    observed = cap_of(img.ravel())
+    null = np.empty(n_shifts)
+    for i in range(n_shifts):
+        a = img
+        if rng.integers(2):
+            a = np.flipud(a)
+        if rng.integers(2):
+            a = np.fliplr(a)
+        a = np.roll(a, (int(rng.integers(meta.prf)), int(rng.integers(meta.pic))),
+                    axis=(0, 1))
+        null[i] = cap_of(a.ravel())
+    p = float((1 + (null >= observed).sum()) / (1 + n_shifts))
+    return {"observed": observed, "null_mean": float(null.mean()),
+            "null_q95": float(np.quantile(null, 0.95)), "p": p}
+
+
 # --------------------------------------------------------------------------
 # Планки и сравнение карт
 # --------------------------------------------------------------------------
@@ -299,6 +385,70 @@ def spearman_maps(
         score_a, score_b = score_a[pool], score_b[pool]
     rho, _ = stats.spearmanr(score_a, score_b)
     return float(rho)
+
+
+def run_protocol(
+    scores: dict[str, np.ndarray], own: list[str], meta, valid: np.ndarray,
+    alpha: float, baseline: str = "criterial", log=None,
+) -> dict[str, pd.DataFrame]:
+    """Полный протокол заверки для набора карт: P-A, null, бутстрэп, вердикт.
+
+    Вынесено из прогонов (``experiments/mae_train``, ``transfer_nn``,
+    ``transfer_cnn``), потому что сравнение методов имеет смысл только если оно
+    выполнено ОДНИМ И ТЕМ ЖЕ кодом: любая правка протокола под конкретный
+    прогон делает этапы несопоставимыми.
+
+    ``own`` — карты-претенденты (сравниваются с ``baseline``), ``alpha`` —
+    предзарегистрированный порог значимости с НАКОПИТЕЛЬНОЙ поправкой на число
+    опробованных конфигураций. Возвращает словарь с ключами ``pa``, ``null``,
+    ``boot``, ``verdict``.
+    """
+    pool = np.flatnonzero(valid)
+    pts = load_verification_points(meta)
+    all_cells = filter_points(pts["cell"].to_numpy(), valid)
+    unb = filter_points(unbiased_cells(pts), valid)
+    sets = [("all", all_cells, point_clusters(all_cells, meta)),
+            ("unbiased_strict", unb, point_clusters(unb, meta))]
+    if log:
+        log(f"точки: все {all_cells.size}, несмещённые {unb.size}; "
+            f"шаг метрики 1 точка = {1.0 / max(unb.size, 1) / config.VER_AREA:.2f} "
+            f"lift; порог значимости {alpha:.5f}")
+
+    pa = pd.concat([pa_curve(scores[n], c, pool=pool).assign(method=n, points=pn)
+                    for n in scores for pn, c, _ in sets], ignore_index=True)
+    null = pd.DataFrame(
+        [{"method": n, "points": pn,
+          **spatial_null_pvalue(scores[n], c, meta, pool=pool)}
+         for n in scores for pn, c, _ in sets])
+    if log:
+        log(f"сдвиговый null ({config.VER_N_SHIFTS} сдвигов) готов")
+    boot = pd.DataFrame(
+        [{"a": n, "b": baseline, "points": pn, "resample": kind,
+          **bootstrap_diff(scores[n], scores[baseline], c, pool=pool,
+                           clusters=cl)}
+         for n in own for pn, c, cls in sets
+         for kind, cl in (("point", None), ("cluster", cls))])
+    if log:
+        log("бутстрэп готов")
+
+    rows = []
+    for n in own:
+        bt = boot[(boot["a"] == n) & (boot["points"] == "unbiased_strict")
+                  & (boot["resample"] == "cluster")].iloc[0]
+        p = null[(null["method"] == n)
+                 & (null["points"] == "unbiased_strict")]["p"].iloc[0]
+        rows.append({"method": n,
+                     "lift": capture_efficiency(scores[n], unb, pool=pool),
+                     "lift_criterial": capture_efficiency(scores[baseline], unb,
+                                                          pool=pool),
+                     "delta": bt["delta"], "ci_lo": bt["ci_lo"],
+                     "ci_hi": bt["ci_hi"], "p_shift": p, "alpha": alpha,
+                     "cond1_ci_lo_gt_0": bool(bt["ci_lo"] > 0),
+                     "cond2_p_lt_alpha": bool(p < alpha),
+                     "superior": bool(bt["ci_lo"] > 0 and p < alpha)})
+    verdict = pd.DataFrame(rows).sort_values("lift", ascending=False)
+    return {"pa": pa, "null": null, "boot": boot, "verdict": verdict,
+            "cells_all": all_cells, "cells_unbiased": unb}
 
 
 def map_agreement(

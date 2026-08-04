@@ -69,12 +69,19 @@ def dropped_columns(df: pd.DataFrame) -> dict[str, str]:
 
 
 def pool_features(df: pd.DataFrame, include_dist: bool = False,
-                  groups: tuple[str, ...] | None = None) -> pd.DataFrame:
+                  groups: tuple[str, ...] | None = None,
+                  include_factors: bool = False) -> pd.DataFrame:
     """Матрица признаков v2 из собранного ``dataset_v2.parquet``.
 
     ``groups`` — какие группы оставить (для абляций); ``None`` = все доступные.
     Отсутствующие группы (закрытая ветка, недосчитанный источник) молча
     пропускаются: сборка обязана работать при неполном наборе источников.
+
+    ``include_factors`` — пул v3: вернуть в признаки 8 геологических факторных
+    слоёв (``config.V3_GEO_FACTORS``). По умолчанию выключено, чтобы прогоны
+    этапа 4 остались воспроизводимыми; включать осмысленно ТОЛЬКО при обучении
+    без учителя — при обучении на псевдометках критериального анализа это
+    циркулярность (см. комментарий у ``config.V3_GEO_FACTORS``).
 
     База (``gm``, ``ls``, ``relief_v1``, опционально ``dist``) берётся у
     :func:`src.features_v11.ladder_features`, группы v2 добавляются здесь
@@ -87,6 +94,8 @@ def pool_features(df: pd.DataFrame, include_dist: bool = False,
     extra += [c for c in lineaments.LINEAMENT_COLS if c in df.columns]
     extra += [c for c in df.columns
               if c.startswith("s2_") and c not in cell_mask.SERVICE_COLS]
+    if include_factors:
+        extra += [c for c in config.V3_GEO_FACTORS if c in df.columns]
     extra = [c for c in dict.fromkeys(extra) if c not in base.columns]
 
     out = pd.concat([base, df[extra]], axis=1) if extra else base.copy()

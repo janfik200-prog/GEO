@@ -144,9 +144,15 @@ def scene_on_grid(scene: dict, meta: integro_grid.GridMeta,
 
     res_m = res_m or config.S2_RES_M
     cache = S2_ANABAR / f"{scene['id']}_{res_m:.0f}m.npz"
+    want = list(config.S2_BANDS.values())
+    have: dict[str, np.ndarray] = {}
     if use_cache and cache.exists():
         with np.load(cache) as z:
-            return {k: z[k] for k in z.files}
+            have = {k: z[k] for k in z.files}
+        # Список каналов растёт со временем (так добавился красный край): сцена
+        # не перекачивается целиком, дочитываются только недостающие каналы.
+        if all(b in have for b in want):
+            return {b: have[b] for b in want}
 
     import rasterio
     from rasterio.enums import Resampling
@@ -165,17 +171,21 @@ def scene_on_grid(scene: dict, meta: integro_grid.GridMeta,
                            src_nodata=0, nodata=0) as vrt:
                 return vrt.read(1).astype("float32")
 
-    bands = {short: read(asset) for asset, short in config.S2_BANDS.items()}
+    need = {asset: short for asset, short in config.S2_BANDS.items() if short not in have}
+    bands = {short: read(asset) for asset, short in need.items()}
     scl = read("scl")
     keep = scl_mask(scl)
     if config.S2_APPLY_VEG_MASK if apply_veg is None else apply_veg:
-        keep = keep & veg_mask(bands["b8a"], bands["b04"])
+        nir = bands.get("b8a", have.get("b8a"))
+        red = bands.get("b04", have.get("b04"))
+        keep = keep & veg_mask(nir, red)
     for k, v in bands.items():
         v[v <= 0] = np.nan                     # 0 = вне снимка / нет данных
         bands[k] = np.where(keep, v, np.nan)
+    have.update(bands)
     if use_cache:
-        np.savez_compressed(cache, **bands)
-    return bands
+        np.savez_compressed(cache, **have)
+    return {b: have[b] for b in want}
 
 
 def median_composite(scenes: list[dict], meta: integro_grid.GridMeta,

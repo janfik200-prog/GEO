@@ -1,4 +1,14 @@
-"""Этап 3: сборка датасета v2 из групп признаков, собранных на этапе 2.
+"""Этапы 3 и 9: сборка датасета из групп признаков, посаженных на общую сетку.
+
+Один сборщик на две версии (``DATASETS``), потому что механика склейки и весь
+контроль качества у них общие, а различаются они только списком источников:
+
+* ``v2`` (этап 3) — рельеф, линеаменты, Sentinel-2;
+* ``v3`` (этап 9) — то же плюс четыре съёмки этапа 8: Sentinel-1, PALSAR-2,
+  ASTER, Landsat 8/9.
+
+Запуск: ``python -m experiments.build_dataset_v2 v3``.
+
 
 Сетка не меняется: та же ``prognoz.pgrid`` (154x149, 500 м), тот же C-порядок
 ячеек. Поэтому «сборка» здесь — не пересчёт координат, а склейка таблиц,
@@ -43,7 +53,7 @@ import matplotlib  # noqa: E402
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
-from src import cell_mask, config, integro_grid  # noqa: E402
+from src import cell_mask, config, features_v2, integro_grid  # noqa: E402
 
 PARTS = {
     "ter": ("terrain_v2.parquet", "src/terrain_v2.py, Copernicus DEM GLO-30"),
@@ -51,12 +61,140 @@ PARTS = {
     "s2": ("s2_features.parquet", "src/s2_composite.py, Sentinel-2 L2A (COG на AWS)"),
 }
 
+#: Датасет v3 (этап 9) = v2 плюс четыре съёмки этапа 8. Отдельный набор, а не
+#: правка PARTS: ``dataset_v2.parquet`` — зафиксированный вход этапов 4 и 4b, и
+#: если его пересобрать, их результаты перестанут воспроизводиться.
+#: ВНИМАНИЕ: «датасет v3» и «пул v3» — разные вещи. Пул v3 = пул v2 + 8
+#: геологических факторных слоёв (``config.V3_GEO_FACTORS``), он про состав
+#: признаков; датасет v3 — про состав источников.
+PARTS_V3 = {
+    **PARTS,
+    "s1": ("s1_features.parquet", "src/sat_sources.py, Sentinel-1 RTC (Planetary Computer)"),
+    "psr": ("psr_features.parquet", "src/sat_sources.py, ALOS PALSAR-2, годовые мозаики"),
+    "ast": ("ast_features.parquet", "src/sat_sources.py, ASTER L1T, мозаика 2001/2006"),
+    "l8": ("l8_features.parquet", "src/sat_sources.py, Landsat 8/9 Collection 2 L2"),
+}
+
+DATASETS = {"v2": PARTS, "v3": PARTS_V3}
+
+#: Паспорт групп: что это, откуда исходник, как посажено на сетку. Пишется в
+#: отчёт, чтобы источник каждого признака читался без чтения кода модулей.
+PASSPORT = {
+    "gm": ("Гравиметрия и магнитометрия, 17 трансформант",
+           "Комплект заказчика: `data/SBORKA_DOP/ГРАВИКА_МАГНИТКА/грав_маг.pgrid`, "
+           "17 гридов 500 м",
+           "билинейная интерполяция; поля направлений (`gr_1GFI_25`, "
+           "`mag_1GFI_25`) — через sin/cos, иначе 179° и −179° оказались бы "
+           "противоположными"),
+    "ls": ("Мультиспектральный снимок, 7 каналов",
+           "Комплект заказчика: `data/SBORKA_DOP/КОСМОСНИМОК/landsat_fragm.pgrid`, "
+           "30 м",
+           "агрегация `average` до 500 м; DN=0 трактуется как NoData (фон "
+           "повёрнутой сцены), редкий тёмный пиксель при этом теряется"),
+    "geo": ("Геологические факторные слои: расстояния и плотности",
+            "Комплект заказчика: `data/Gis-integro/shp_dbf/*.shp` — "
+            "`glub_raz_nw` (разломы 1), `glub_r_nw` (разломы 2), `dayki_buf` "
+            "(дайки), `kory` (коры выветривания), `fasii` (фации), "
+            "`gr_dol_vp_poly` (палеодолины)",
+            "растры расстояния до объекта и плотности (суммарная длина для "
+            "разломов, площадь для даек) в радиусе `config.DENSITY_RADIUS` = "
+            "2500 м"),
+    "dist": ("Расстояние до гидросети",
+             "Комплект заказчика: `data/SBORKA_DOP/ТОПО/dnl.shp`, `dnara.shp`",
+             "растр расстояния; отдельная группа от `geo`, потому что "
+             "гидросеть — не рудоконтролирующий фактор, а разметка смещения "
+             "точек опробования"),
+    "relief_v1": ("Рельеф из комплекта заказчика",
+                  "`data/SBORKA_DOP/РЕЛЬЕФ/topo5_new.pgrid`, 100 м",
+                  "`average` до 500 м, пересчёт в метры (×0.2 — единицы "
+                  "источника метры ×5); дублирует `dem_elev` (Spearman +1.00), "
+                  "оставлен как исторический контроль"),
+    "ter": ("Производные рельефа: высота, уклон, TPI, врез, локальный размах",
+            "Copernicus DEM GLO-30, 30 м, тайлы 1°×1° "
+            "(`https://copernicus-dem-30m.s3.amazonaws.com`, анонимно). SRTM "
+            "непригоден: предел 60° с.ш., лист на 71°",
+            "DEM перепроецируется в метрическую систему сетки с шагом "
+            "`TER_RES_M` = 100 м, производные считаются на изотропной сетке, "
+            "затем агрегация на 500 м средним и std"),
+    "lin": ("Линеаменты: плотность, плотность узлов, расстояние, анизотропия",
+            "тот же Copernicus DEM GLO-30 — не оптика: под сплошной тундрой "
+            "98 % пикселей заняты растительностью, оптический «линеамент» чаще "
+            "всего граница растительного сообщества",
+            "отмывка по 8 азимутам (высота солнца 30°) → Canny (σ=2) → "
+            "преобразование Хафа (порог 8, длина ≥10 px, разрыв ≤3 px); "
+            "расхождение чётных и нечётных азимутов — стоп-правило ветки"),
+    "s2": ("9 каналов + 5 отношений (mean и std) + качество",
+           "STAC `sentinel-2-l2a`, `https://earth-search.aws.element84.com/v1`",
+           "2019–2025, июль–август, облачность <40 %, до 30 сцен на тайл, "
+           "≥3 наблюдения на пиксель, маска SCL (оставлены классы 4, 5, 7), "
+           "медианный композит 100 м → 500 м (mean+std). Вегетационная маска "
+           "выключена: при NDVI>0.35 валидных ячеек не оставалось"),
+    "s2raw": ("Подгруппа: только сырые каналы Sentinel-2, без отношений",
+              "тот же композит, что и `s2`",
+              "служит для абляций — проверки, не создают ли отношения каналов "
+              "мнимого прироста"),
+    "l8": ("6 каналов + температура поверхности + 4 отношения (mean и std)",
+           "STAC `landsat-c2-l2` (Collection 2 Level-2), Planetary Computer",
+           "2013–2025, июль–август, облачность <40 %, до 15 сцен на path, "
+           "отбраковка по битам QA 1/3/4/5, масштабы SR (2.75e-05, −0.2) и "
+           "ST (0.00341802, 149.0)"),
+    "s1": ("Радар C-диапазона: VV, VH, их отношение (mean и std)",
+           "STAC `sentinel-1-rtc` (радиометрически-террейн-корректированный), "
+           "Planetary Computer",
+           "2018–2025, июнь–сентябрь, до 12 сцен на орбиту, порог шума −35 дБ"),
+    "psr": ("Радар L-диапазона: HH, HV, отношение, угол падения (mean и std)",
+            "STAC `alos-palsar-mosaic` — готовые годовые мозаики, "
+            "Planetary Computer",
+            "2015–2021, поляризации HH/HV, калибровочное смещение −83.0 дБ"),
+    "ast": ("9 каналов VNIR+SWIR и 6 минеральных индексов (mean и std)",
+            "STAC `aster-l1t`, Planetary Computer",
+            "2000–2008, июнь–сентябрь, облачность <60 %, до 12 сцен, ≥1 "
+            "наблюдение. Только архив: SWIR-детектор отказал в апреле 2008, "
+            "отсюда самая высокая доля пропусков среди всех групп"),
+}
+
+#: Космические съёмки: какой аппарат снимал. Отдельная таблица, потому что по
+#: имени группы это не читается, а для интерпретации признака важно, что именно
+#: измеряет сенсор — отражённый свет, собственное излучение или обратное
+#: рассеяние радиоволны.
+SATELLITES = {
+    "ls": ("Landsat 7", "ETM+ (Enhanced Thematic Mapper Plus)", "NASA / USGS",
+           "оптика VNIR+SWIR, 30 м", "фрагмент из комплекта заказчика, "
+           "дата съёмки в комплекте не указана"),
+    "s2": ("Sentinel-2A / 2B (с 2024 также 2C)", "MSI (MultiSpectral Instrument)",
+           "ESA, программа Copernicus", "оптика VNIR+SWIR, 10–20 м",
+           "композит по 2019–2025, июль–август"),
+    "l8": ("Landsat 8 и Landsat 9", "OLI/TIRS и OLI-2/TIRS-2", "NASA / USGS",
+           "оптика 30 м, тепловой канал 100 м (даёт `l8_lst`)",
+           "композит по 2013–2025, июль–август"),
+    "s1": ("Sentinel-1A / 1B / 1C", "C-SAR, радар C-диапазона (5.4 ГГц)",
+           "ESA, программа Copernicus", "RTC-продукт 10 м, поляризации VV/VH",
+           "композит по 2018–2025, июнь–сентябрь"),
+    "psr": ("ALOS-2", "PALSAR-2, радар L-диапазона (1.2 ГГц)", "JAXA (Япония)",
+            "годовые мозаики 25 м, поляризации HH/HV",
+            "мозаики 2015–2021; длинная волна проникает под растительный "
+            "покров глубже, чем C-диапазон"),
+    "ast": ("Terra", "ASTER", "прибор METI/JAXA на аппарате NASA",
+            "VNIR 15 м, SWIR 30 м, TIR 90 м",
+            "архив 2000–04.2008: SWIR-детектор вышел из строя, новых сцен нет"),
+    "ter": ("TerraSAR-X + TanDEM-X (через продукт Copernicus DEM GLO-30)",
+            "радарная интерферометрия X-диапазона", "DLR (Германия) / ESA",
+            "ЦМР 30 м", "съёмка 2011–2015; это не снимок, а высота, "
+            "восстановленная по паре радарных изображений"),
+    "lin": ("то же, что `ter`", "—", "—", "—",
+            "линеаменты считаются по отмывке той же ЦМР"),
+}
+
+NOT_SATELLITE = {
+    "gm": "наземная и аэрогеофизическая съёмка (гравика, магнитка)",
+    "geo": "векторная геологическая карта (оцифрованные слои)",
+    "dist": "топооснова: гидросеть",
+    "relief_v1": "топооснова: рельеф из комплекта заказчика",
+}
+
 
 def group_of(col: str) -> str | None:
-    for name, prefixes in config.V2_FEATURE_GROUPS.items():
-        if any(col.startswith(p) for p in prefixes):
-            return name
-    return None
+    return features_v2.feature_group(col)
 
 
 def cond_number(tbl: pd.DataFrame, valid: np.ndarray) -> float:
@@ -71,7 +209,8 @@ def cond_number(tbl: pd.DataFrame, valid: np.ndarray) -> float:
     return float(np.linalg.cond(np.corrcoef(M, rowvar=False)))
 
 
-def main() -> None:
+def main(version: str = "v2") -> None:
+    parts = DATASETS[version]
     report: list[str] = []
     meta = integro_grid.read_pgrid(config.GOLD_TARGET_PGRID)
     proj4 = integro_grid.read_grid_proj4(config.GOLD_TARGET_PGRID)
@@ -79,7 +218,7 @@ def main() -> None:
     n_cells = meta.prf * meta.pic
     print(f"Сетка: {meta.prf}x{meta.pic} = {n_cells} ячеек, шаг {meta.dx} м")
 
-    report.append("# Датасет v2: источники и контроль качества")
+    report.append(f"# Датасет {version}: источники и контроль качества")
     report.append("")
     report.append(f"Сетка: `{config.GOLD_TARGET_PGRID.name}` {meta.prf}x{meta.pic}, "
                   f"шаг {meta.dx} м, CRS `{proj4}`")
@@ -95,12 +234,13 @@ def main() -> None:
     report.append("| группа | источник | признаков | статус |")
     report.append("|---|---|---|---|")
     for name, prefixes in config.V2_FEATURE_GROUPS.items():
-        if name in PARTS:
+        if name in parts:
             continue
         cols = [c for c in df.columns if group_of(c) == name]
-        report.append(f"| `{name}` | dataset_v1.parquet | {len(cols)} | из v1 |")
+        if cols:
+            report.append(f"| `{name}` | dataset_v1.parquet | {len(cols)} | из v1 |")
 
-    for name, (fname, src) in PARTS.items():
+    for name, (fname, src) in parts.items():
         path = config.PROCESSED_DIR / fname
         if not path.exists():
             print(f"ГРУППА {name}: файла {fname} нет — пропущена")
@@ -113,6 +253,31 @@ def main() -> None:
         out = pd.concat([out, part], axis=1)
         print(f"группа {name}: +{len(part.columns)} признаков из {fname}")
         report.append(f"| `{name}` | {src} | {len(part.columns)} | добавлена |")
+
+    present = sorted({g for c in out.columns if (g := group_of(c))})
+
+    report.append("")
+    report.append("## Паспорт групп: что это, откуда и как посажено на сетку")
+    report.append("")
+    report.append("| группа | что это | исходный источник | обработка |")
+    report.append("|---|---|---|---|")
+    for g in present:
+        if g in PASSPORT:
+            what, src, how = PASSPORT[g]
+            report.append(f"| `{g}` | {what} | {src} | {how} |")
+
+    report.append("")
+    report.append("## Космические съёмки: какой аппарат снимал")
+    report.append("")
+    report.append("| группа | аппарат | сенсор | оператор | что и с каким "
+                  "разрешением | период съёмки |")
+    report.append("|---|---|---|---|---|---|")
+    for g in present:
+        if g in SATELLITES:
+            report.append("| `" + g + "` | " + " | ".join(SATELLITES[g]) + " |")
+    report.append("")
+    report.append("Не космические съёмки: " + "; ".join(
+        f"`{g}` — {txt}" for g, txt in NOT_SATELLITE.items() if g in present) + ".")
 
     valid = np.asarray(cell_mask.build_valid_mask(out))
     print(f"валидных ячеек: {int(valid.sum())} из {len(out)}")
@@ -160,15 +325,39 @@ def main() -> None:
         print(f"  {a:<18} ~ {b:<18} rho = {r:+.2f}")
         report.append(f"| `{a}` | `{b}` | {r:+.2f} |")
 
-    out_path = config.PROCESSED_DIR / "dataset_v2.parquet"
+    report.append("")
+    report.append("## Полный список признаков по группам")
+    report.append("")
+    for g, cols in sorted(groups.items()):
+        report.append(f"**`{g}`** ({len(cols)}): " + " ".join(f"`{c}`" for c in cols))
+        report.append("")
+    no_group = [c for c in out.columns
+                if group_of(c) is None and c not in ("row", "col", "x", "y")]
+    if no_group:
+        report.append("Вне групп (служебные, в обучении не участвуют): "
+                      + " ".join(f"`{c}`" for c in no_group) + ".")
+        report.append("")
+    report.append("Столбцы `row`, `col`, `x`, `y` — геометрия ячейки, не признаки.")
+    report.append("")
+    report.append("## Что в датасет НЕ входит")
+    report.append("")
+    report.append("Стоп-лист постановки — прямые признаки минерагенической карты "
+                  "(геохимические ореолы, геохимическое опробование, привнос "
+                  "урана, точки рудопроявлений) и критериальный скор `prognoz` "
+                  "с промежуточными `new_calc_prop*` "
+                  "(`config.GOLD_FEATURES_STOP`). Всё это используется только "
+                  "для заверки и сравнения методов, но никогда как признак.")
+
+    out_path = config.PROCESSED_DIR / f"dataset_{version}.parquet"
     out.to_parquet(out_path, index=False)
-    md = config.PROCESSED_DIR / "dataset_v2_sources.md"
+    md = config.PROCESSED_DIR / f"dataset_{version}_sources.md"
     md.write_text("\n".join(report) + "\n", encoding="utf-8")
 
     # --- Превью: по одному представителю каждой новой группы ---
     shape = (meta.prf, meta.pic)
     show = [c for c in ("dem_incision", "lin_dens", "s2_clay", "s2_ndvi",
-                        "s2_b11", "dem_tpi_2km") if c in out.columns]
+                        "s1_vv_vh", "psr_hh_hv", "ast_aloh", "l8_lst",
+                        "s2_b11", "dem_tpi_2km") if c in out.columns][:6]
     if show:
         fig, axes = plt.subplots(2, 3, figsize=(16, 10))
         for ax, c in zip(axes.ravel(), show):
@@ -180,10 +369,10 @@ def main() -> None:
             fig.colorbar(im, ax=ax, fraction=0.046)
         for ax in axes.ravel()[len(show):]:
             ax.axis("off")
-        fig.suptitle(f"Датасет v2: {len(all_cols)} числовых признаков, "
+        fig.suptitle(f"Датасет {version}: {len(all_cols)} числовых признаков, "
                      f"{int(valid.sum())} валидных ячеек", fontsize=13)
         fig.tight_layout()
-        out_png = ROOT / "outputs" / "dataset_v2_preview.png"
+        out_png = ROOT / "outputs" / f"dataset_{version}_preview.png"
         out_png.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(out_png, dpi=120, bbox_inches="tight")
 
@@ -191,4 +380,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    ver = sys.argv[1] if len(sys.argv) > 1 else "v2"
+    if ver not in DATASETS:
+        raise SystemExit(f"неизвестный датасет {ver!r}; доступны: {list(DATASETS)}")
+    main(ver)

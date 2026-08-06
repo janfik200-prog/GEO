@@ -54,6 +54,76 @@ V2_DROPPED: dict[str, str] = {
     "s2_ferric_std": "= монотонная функция s2_ndvi_std (r = +0.987)",
 }
 
+#: Этап 9: отбросы новых съёмок. Причина у каждой колонки — ИЗМЕРЕНА, а не
+#: объявлена; максимум |r| считался против всего уже собранного пула.
+#:
+#: Landsat 8/9. Оптика повторяет Sentinel-2: те же полосы спектра, та же
+#: поверхность, разрешение втрое грубее. Сенсор скачан целиком (90 сцен), но в
+#: пул от него проходит ТОЛЬКО тепловой канал — того, что меряет ``l8_lst``,
+#: у Sentinel-2 нет вообще, и с независимым тепловым каналом Landsat 7 он сходится
+#: на 0.66, то есть подтверждается, но не переписывается.
+SAT_DROPPED: dict[str, str] = {
+    # Радар. В дБ отношение поляризаций — это РАЗНОСТЬ каналов, а не новая
+    # величина: измерено max|vv_vh - (vv - vh)| = 5e-6 (округление float32),
+    # r = 1.000000. Оба канала в пуле остаются, так что информация отношения
+    # никуда не девается, — а вот обусловленность пула из-за него была 2.5e13
+    # вместо 3.4e3, то есть расстояние Махаланобиса теряло смысл целиком.
+    # Текстуры (``*_std``) НЕ выбрасываются: разброс разности не равен разности
+    # разбросов (r = -0.19 у S1 и -0.92 у PALSAR — связь есть, тождества нет).
+    "s1_vv_vh": "= s1_vv - s1_vh точно (дБ), max|d| = 5e-6",
+    "psr_hh_hv": "= psr_hh - psr_hv точно (дБ), max|d| = 5e-6",
+    "l8_blue": "|r| 0.93 с s2_ndvi — та же полоса, грубее втрое",
+    "l8_green": "|r| 0.86 с ls_ch7 и 0.90 с s2_b03_std (текстура)",
+    "l8_red": "|r| 0.92 с s2_b04",
+    "l8_nir08": "|r| 0.97 с s2_b8a",
+    "l8_swir16": "|r| 0.83 с s2_b11 — та же полоса SWIR",
+    "l8_swir22": "|r| 0.95 с s2_b12",
+    "l8_iron_ox": "|r| 0.90 с s2_iron_ox — тот же индекс по тем же полосам",
+    "l8_ferrous": "|r| 1.00 с s2_ferrous",
+    "l8_clay": "|r| 1.00 с s2_clay",
+    "l8_ndvi": "|r| 0.99 с s2_ndvi",
+    "l8_blue_std": "|r| 0.92 с s2_b12_std",
+    "l8_green_std": "|r| 0.90 с s2_b03_std",
+    "l8_red_std": "|r| 0.94 с s2_b04_std",
+    "l8_nir08_std": "|r| 0.97 с s2_b8a_std",
+    "l8_swir16_std": "|r| 0.88 с s2_b11_std — та же текстура, грубее",
+    "l8_swir22_std": "|r| 0.95 с s2_b12_std",
+    "l8_iron_ox_std": "|r| 0.83 с s2_iron_ox_std",
+    "l8_ferrous_std": "|r| 1.00 с s2_ferrous_std",
+    "l8_clay_std": "|r| 0.99 с s2_clay_std",
+    "l8_ndvi_std": "|r| 0.98 с s2_ndvi_std",
+}
+# ASTER. Сырые средние каналов выброшены не как дубли — индексы предсказывают их
+# лишь на R^2 = 0.17-0.51, — а по двум разным причинам, и их нельзя смешивать.
+#
+# SWIR (b04-b09): АРТЕФАКТ. Это мозаика ОДНОЙ даты 07.06.2001, и уровень каналов
+# плывёт с широтой (r с координатой y = +0.52..+0.58 при связи с рельефом всего
+# 0.46-0.52). Такой признак прогнозирует «севернее или южнее», а не геологию.
+#
+# VNIR (b01-b03): широтного дрейфа НЕТ (r с y = -0.14..-0.31), и это решение, а
+# не измерение: тот же участок спектра Sentinel-2 снимает на 10 м медианой по
+# 21 наблюдению вместо одной сцены 2001 года. Держать обе версии одного
+# диапазона — значит добавить шум одиночной сцены к устойчивому композиту.
+#
+# Индексы от дрейфа свободны по построению: отношение сокращает общий множитель
+# освещённости, у ast_aloh, ast_carb, ast_ferric |r| с координатами не выше 0.07.
+# Внимание к трём остальным: ast_ferrous (r с x = +0.59), ast_kaolin (-0.39),
+# ast_alter (-0.33) координатный наклон сохранили — их вклад в скор придётся
+# проверять отдельно, даже если группа пройдёт абляцию.
+#
+# Текстуры сырых каналов остаются: разброс ВНУТРИ ячейки на общий множитель не
+# реагирует, индексами не описывается (R^2 = 0.01-0.09), а обусловленность их
+# блока 1.3e3 — вырождения в пул они не вносят.
+SAT_DROPPED.update({
+    f"ast_b0{i}": f"SWIR мозаики одной даты: уровень плывёт с широтой (r с y = {r:+.2f})"
+    for i, r in zip(range(4, 10), (0.53, 0.54, 0.52, 0.58, 0.56, 0.58))
+})
+SAT_DROPPED.update({
+    f"ast_b0{i}": "VNIR одиночной сцены 2001 г.: тот же диапазон снят Sentinel-2 "
+                  "на 10 м медианой по 21 наблюдению"
+    for i in (1, 2, 3)
+})
+
 #: Отброс, у которого есть УСЛОВИЕ: колонка -> чем она заменена.
 #: Дубль убирается, только если замена реально пришла в датасет. Иначе сборка
 #: на неполном наборе источников (нет terrain_v2.parquet) молча теряла бы
@@ -61,16 +131,29 @@ V2_DROPPED: dict[str, str] = {
 V2_DROPPED_IF: dict[str, str] = {"relief_m": "dem_elev"}
 
 
-def dropped_columns(df: pd.DataFrame) -> dict[str, str]:
-    """Что именно исключается из пула для ДАННОГО датасета, с причиной."""
-    out = {c: why for c, why in V2_DROPPED.items()
+#: Источники, добавленные в датасете v3 (этап 8). Префикс -> группа абляции.
+SAT_PREFIXES: tuple[str, ...] = ("s1_", "psr_", "ast_", "l8_")
+
+
+def dropped_columns(df: pd.DataFrame, restore: tuple[str, ...] = ()) -> dict[str, str]:
+    """Что именно исключается из пула для ДАННОГО датасета, с причиной.
+
+    ``restore`` возвращает названные колонки в пул. Нужен группе ``s2raw``:
+    правило отброса сырых каналов Sentinel-2 писалось по композиту из 60 сцен и
+    на композите из 180 перестало выполняться (см. ``config.V2_FEATURE_GROUPS``).
+    Старые пулы v2/v3 при этом обязаны остаться побайтно прежними, иначе
+    результаты этапов 4 и 4b станут несравнимы с новыми, — поэтому возврат
+    задаётся вызывающим прогоном, а не правкой словаря отбросов.
+    """
+    out = {c: why for c, why in {**V2_DROPPED, **SAT_DROPPED}.items()
            if c not in V2_DROPPED_IF or V2_DROPPED_IF[c] in df.columns}
-    return out
+    return {c: why for c, why in out.items() if c not in restore}
 
 
 def pool_features(df: pd.DataFrame, include_dist: bool = False,
                   groups: tuple[str, ...] | None = None,
-                  include_factors: bool = False) -> pd.DataFrame:
+                  include_factors: bool = False,
+                  restore: tuple[str, ...] = ()) -> pd.DataFrame:
     """Матрица признаков v2 из собранного ``dataset_v2.parquet``.
 
     ``groups`` — какие группы оставить (для абляций); ``None`` = все доступные.
@@ -93,20 +176,29 @@ def pool_features(df: pd.DataFrame, include_dist: bool = False,
     extra: list[str] = [c for c in terrain_v2.TERRAIN_COLS if c in df.columns]
     extra += [c for c in lineaments.LINEAMENT_COLS if c in df.columns]
     extra += [c for c in df.columns
-              if c.startswith("s2_") and c not in cell_mask.SERVICE_COLS]
+              if c.startswith(("s2_",) + SAT_PREFIXES) and not cell_mask.is_service(c)]
     if include_factors:
         extra += [c for c in config.V3_GEO_FACTORS if c in df.columns]
     extra = [c for c in dict.fromkeys(extra) if c not in base.columns]
 
     out = pd.concat([base, df[extra]], axis=1) if extra else base.copy()
-    out = out.drop(columns=[c for c in dropped_columns(df) if c in out.columns])
+    out = out.drop(columns=[c for c in dropped_columns(df, restore)
+                            if c in out.columns])
     if groups is not None:
         out = out[[c for c in out.columns if feature_group(c) in groups]]
     return out
 
 
 def feature_group(col: str) -> str | None:
-    """Группа признака по реестру ``config.V2_FEATURE_GROUPS``."""
+    """Группа признака по реестру ``config.V2_FEATURE_GROUPS``.
+
+    Точное имя сильнее префикса, и это не стилистика: группа ``s2raw`` задана
+    полными именами каналов, а по префиксу ``s2_b02`` в неё утянуло бы и
+    текстуру ``s2_b02_std``, которой там не место — она остаётся в ``s2``.
+    """
+    for name, keys in config.V2_FEATURE_GROUPS.items():
+        if col in keys:
+            return name
     for name, prefixes in config.V2_FEATURE_GROUPS.items():
         if any(col.startswith(p) for p in prefixes):
             return name

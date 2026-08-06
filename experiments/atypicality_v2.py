@@ -67,34 +67,42 @@ def run_ladder(X, valid, tag=""):
 
 
 def main(include_factors: bool = False, stem_name: str = "atypicality_v2",
-         pool_name: str = "v2") -> None:
+         pool_name: str = "v2", dataset: str = "dataset_v2.parquet",
+         restore: tuple[str, ...] = ()) -> None:
     """Прогон протокола. ``include_factors`` переключает пул v2 -> v3.
 
     Параметризация, а не копия файла: протокол заверки обязан быть побайтно
-    одним и тем же для обоих пулов, иначе сравнение v2 и v3 ничего не значит.
+    одним и тем же для всех пулов, иначе их сравнение ничего не значит.
+
+    ``dataset`` — какой parquet читать (этап 9 добавил ``dataset_v3.parquet`` с
+    четырьмя новыми съёмками); ``restore`` — колонки, возвращаемые в пул вопреки
+    словарю отбросов (см. :func:`src.features_v2.dropped_columns`).
     """
     t0 = time.time()
 
     def log(msg):
         print(f"[{time.time() - t0:4.0f}s] {msg}", flush=True)
 
-    path = config.PROCESSED_DIR / "dataset_v2.parquet"
+    path = config.PROCESSED_DIR / dataset
     if not path.exists():
-        raise SystemExit("нет dataset_v2.parquet — сначала "
-                         "python -m experiments.build_dataset_v2")
+        raise SystemExit(f"нет {dataset} — сначала "
+                         f"python -m experiments.build_dataset_v2 "
+                         f"{path.stem.replace('dataset_', '')}")
     df = pd.read_parquet(path)
     valid = cell_mask.build_valid_mask(df)
     pool_valid = np.flatnonzero(valid)
     domains = cell_mask.build_domains(df)
-    log(f"датасет v2: {df.shape[0]} ячеек, {df.shape[1]} колонок; "
+    log(f"{path.stem}: {df.shape[0]} ячеек, {df.shape[1]} колонок; "
         f"валидных {int(valid.sum())}")
 
-    feat = features_v2.pool_features(df, include_factors=include_factors)
+    feat = features_v2.pool_features(df, include_factors=include_factors,
+                                     restore=restore)
     sizes = features_v2.group_sizes(feat)
     cond = features_v2.condition_number(feat, valid)
     log(f"пул {pool_name}: {feat.shape[1]} признаков {sizes}, cond={cond:.3g}")
-    for col, why in features_v2.dropped_columns(df).items():
-        log(f"  исключён {col}: {why}")
+    for col, why in features_v2.dropped_columns(df, restore).items():
+        if col in df.columns:
+            log(f"  исключён {col}: {why}")
 
     X = atypicality.prepare_matrix(feat, valid)
 
@@ -156,7 +164,8 @@ def main(include_factors: bool = False, stem_name: str = "atypicality_v2",
         for mode, keep in [("only", (g,)),
                            ("without", tuple(x for x in groups if x != g))]:
             sub = features_v2.pool_features(df, groups=keep,
-                                            include_factors=include_factors)
+                                            include_factors=include_factors,
+                                            restore=restore)
             if sub.shape[1] < 2:
                 continue
             Xg = atypicality.prepare_matrix(sub, valid)

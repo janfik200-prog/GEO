@@ -201,10 +201,24 @@ def fetch_ast(meta, log=None) -> tuple[pd.DataFrame, list]:
     return stac_grid.to_cells({**comp, **idx}, meta, n_obs=n_obs, prefix="ast_"), items
 
 
+# ---------------------------------------------------------------- ASTER TIR
+def fetch_astir(meta, log=None) -> tuple[pd.DataFrame, list]:
+    """Тепловые каналы ASTER и индексы Ниномии (см. :mod:`src.aster_tir`).
+
+    Живёт в отдельном модуле, а не здесь: другой каталог (LP DAAC вместо
+    Planetary Computer, с авторизацией Earthdata) и другая физика (радианс
+    и нормировка на фиксированную температуру вместо отношения сырых DN).
+    """
+    from . import aster_tir
+
+    return aster_tir.fetch(meta, log)
+
+
 #: Реестр сенсоров для прогонов: имя -> (функция, человекочитаемое название).
 SENSORS = {
     "s1": (fetch_s1, "Sentinel-1 RTC (C-band радар)"),
     "l8": (fetch_l8, "Landsat 8/9 Collection 2 L2"),
     "psr": (fetch_psr, "ALOS PALSAR-2 (L-band радар)"),
     "ast": (fetch_ast, "ASTER L1T (архив SWIR до 2008)"),
+    "astir": (fetch_astir, "ASTER TIR (тепловой диапазон, весь архив LP DAAC)"),
 }

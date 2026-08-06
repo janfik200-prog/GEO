@@ -146,7 +146,7 @@ def test_indices_reference_existing_bands(registry, bands):
 
 def test_sensor_registry_is_callable():
     """Реестр сенсоров не должен разъезжаться с функциями."""
-    assert set(sat_sources.SENSORS) == {"s1", "l8", "psr", "ast"}
+    assert set(sat_sources.SENSORS) == {"s1", "l8", "psr", "ast", "astir"}
     for fn, title in sat_sources.SENSORS.values():
         assert callable(fn) and isinstance(title, str)
 

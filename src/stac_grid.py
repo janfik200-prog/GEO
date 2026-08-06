@@ -106,15 +106,17 @@ def grid_transform(meta: integro_grid.GridMeta, res_m: float):
     return Affine(res_m, 0.0, meta.x0, 0.0, -res_m, meta.y_top), meta.prf * k, meta.pic * k
 
 
-def read_on_grid(item, asset: str, meta: integro_grid.GridMeta,
+def href_on_grid(href: str, meta: integro_grid.GridMeta,
                  res_m: float | None = None, band: int = 1,
-                 nodata: float | None = None, nearest: bool = False) -> np.ndarray:
-    """Один канал ассета, посаженный на сетку листа; вне данных — NaN.
+                 nodata: float | None = None, nearest: bool = False,
+                 env: dict | None = None) -> np.ndarray:
+    """Растр по ссылке, посаженный на сетку листа; вне данных — NaN.
 
-    ``nearest`` обязателен для масок качества: усреднять номера классов нельзя,
-    среднее между «облако» и «чисто» смысла не имеет.
+    Отделено от :func:`read_on_grid` ради источников без STAC: у LP DAAC каналы
+    ASTER TIR лежат обычными GeoTIFF по прямым ссылкам, а посадка на сетку нужна
+    ровно та же. ``env`` — переменные GDAL на время чтения (у LP DAAC это
+    авторизация Earthdata через ``_netrc`` и файл cookies).
     """
-    import planetary_computer as pc
     import rasterio
     from pyproj import CRS
     from rasterio.enums import Resampling
@@ -125,16 +127,30 @@ def read_on_grid(item, asset: str, meta: integro_grid.GridMeta,
     if proj4 is None:
         raise RuntimeError("proj4 целевой сетки не найден (sidecar .pj4)")
     transform, height, width = grid_transform(meta, res_m)
+    with rasterio.Env(**(env or {})):
+        with rasterio.open(href) as src:
+            nd = src.nodata if nodata is None else nodata
+            with WarpedVRT(src, crs=CRS.from_proj4(proj4), transform=transform,
+                           height=height, width=width, dtype="float32",
+                           resampling=Resampling.nearest if nearest else Resampling.average,
+                           src_nodata=nd, nodata=np.nan) as vrt:
+                return vrt.read(band).astype("float32")
+
+
+def read_on_grid(item, asset: str, meta: integro_grid.GridMeta,
+                 res_m: float | None = None, band: int = 1,
+                 nodata: float | None = None, nearest: bool = False) -> np.ndarray:
+    """Один канал ассета STAC, посаженный на сетку листа; вне данных — NaN.
+
+    ``nearest`` обязателен для масок качества: усреднять номера классов нельзя,
+    среднее между «облако» и «чисто» смысла не имеет.
+    """
+    import planetary_computer as pc
+
     # Подпись обновляется прямо перед чтением: у ссылок MPC короткий срок жизни,
     # а прогон по сотне сцен идёт часами.
-    href = pc.sign(item.assets[asset].href)
-    with rasterio.open(href) as src:
-        nd = src.nodata if nodata is None else nodata
-        with WarpedVRT(src, crs=CRS.from_proj4(proj4), transform=transform,
-                       height=height, width=width, dtype="float32",
-                       resampling=Resampling.nearest if nearest else Resampling.average,
-                       src_nodata=nd, nodata=np.nan) as vrt:
-            return vrt.read(band).astype("float32")
+    return href_on_grid(pc.sign(item.assets[asset].href), meta, res_m,
+                        band=band, nodata=nodata, nearest=nearest)
 
 
 def scene_on_grid(item, bands: dict[str, tuple[str, int]],

@@ -27,8 +27,10 @@ S1_ANABAR = CACHE / "s1_anabar"          # Sentinel-1 RTC
 L8_ANABAR = CACHE / "l8_anabar"          # Landsat 8/9 Collection 2 L2
 PSR_ANABAR = CACHE / "psr_anabar"        # ALOS PALSAR-2 годовые мозаики
 AST_ANABAR = CACHE / "ast_anabar"        # ASTER L1T (архив до 04.2008)
+ASTIR_ANABAR = CACHE / "astir_anabar"    # ASTER TIR каналы 10-14 (LP DAAC, весь архив)
 GGK200 = CACHE / "ggk200"                # листы Госгеолкарты-200 (растры geokniga)
 
 for _p in (NURE, MRDS_CSV.parent, WORLD_GEO, ANABAR_GEO, ANABAR_DEM, CMMI, CMMI_AU,
-           S2_ANABAR, S1_ANABAR, L8_ANABAR, PSR_ANABAR, AST_ANABAR, GGK200):
+           S2_ANABAR, S1_ANABAR, L8_ANABAR, PSR_ANABAR, AST_ANABAR, ASTIR_ANABAR,
+           GGK200):
     _p.mkdir(parents=True, exist_ok=True)

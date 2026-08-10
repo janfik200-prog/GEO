@@ -31,9 +31,17 @@ import pandas as pd
 from scipy import ndimage
 from scipy.spatial import cKDTree
 
-from . import config, data_loader, gold_features, integro_grid
+from . import config, data_loader, features_v2, gold_features, integro_grid
 from .model import BackgroundEnsemble
 from .validation import _coverage
+
+# Датасет v5: группы-дубли факторных слоёв формулы (geo2 — раздельные фации/
+# контакт/узлы разломов, детализация тех же ролей facies/struct, что уже
+# исключены через CRIT_EXCLUDE_FACTOR_FEATURES) исключаются по той же причине
+# циркулярности; geo — сами исключённые 8 слоёв. row/col/x/y/mask_svita —
+# координаты и геологическая маска, не независимые измерения.
+V5_EXCLUDE_GROUPS = ("geo", "geo2")
+V5_EXCLUDE_COLS = ("row", "col", "x", "y", "mask_svita")
 
 
 def load_prognoz_grid() -> tuple[integro_grid.GridMeta, np.ndarray]:
@@ -73,14 +81,31 @@ def label_ore_objects(
     return out
 
 
-def training_features() -> pd.DataFrame:
-    """Матрица признаков без факторных слоёв критериального анализа (независимая)."""
-    df = gold_features.load_feature_matrix()
-    drop = [c for c in config.CRIT_EXCLUDE_FACTOR_FEATURES if c in df.columns]
-    return df.drop(columns=drop)
+def training_features(dataset: str = "v1") -> pd.DataFrame:
+    """Матрица признаков без факторных слоёв критериального анализа (независимая).
+
+    ``dataset="v1"`` (по умолчанию) — исходные 29 признаков (гравика/магнитка,
+    Landsat 7, рельеф, гидросеть), как в первом прогоне задачи.
+    ``dataset="v5"`` — расширенный ``dataset_v5.parquet`` (Sentinel-1/2,
+    Landsat 8/9, PALSAR-2, ASTER, потенциальные поля и их трансформанты,
+    доп. рельеф): та же логика исключения факторных слоёв, но по группам
+    ``V5_EXCLUDE_GROUPS`` (geo — 8 факторных слоёв, geo2 — их раздельная
+    детализация: facies1/facies2/contact/fault_node дублируют роли
+    facies/struct, уже исключённые, и вносили бы ту же циркулярность).
+    """
+    if dataset == "v1":
+        df = gold_features.load_feature_matrix()
+        drop = [c for c in config.CRIT_EXCLUDE_FACTOR_FEATURES if c in df.columns]
+        return df.drop(columns=drop)
+    if dataset == "v5":
+        df = pd.read_parquet(config.PROCESSED_DIR / "dataset_v5.parquet")
+        drop = [c for c in df.columns
+                if features_v2.feature_group(c) in V5_EXCLUDE_GROUPS or c in V5_EXCLUDE_COLS]
+        return df.drop(columns=drop)
+    raise ValueError(f"неизвестный dataset={dataset!r}, ожидается 'v1' или 'v5'")
 
 
-def build_dataset() -> tuple[np.ndarray, np.ndarray, np.ndarray, list[str], integro_grid.GridMeta]:
+def build_dataset(dataset: str = "v1") -> tuple[np.ndarray, np.ndarray, np.ndarray, list[str], integro_grid.GridMeta]:
     """Собрать ``(X, labels_flat, coords, feature_names, meta)`` для LOO-CV.
 
     ``labels_flat`` — метка объекта на ячейку, в том же C-порядке (строка 0 —
@@ -95,7 +120,7 @@ def build_dataset() -> tuple[np.ndarray, np.ndarray, np.ndarray, list[str], inte
     labels[(labels == 0) & (prognoz <= config.CRIT_TARGET_THRESHOLD)] = -1
     labels_flat = labels.ravel()
 
-    feat_df = training_features().fillna(0)
+    feat_df = training_features(dataset).fillna(0)
     if len(feat_df) != labels_flat.size:
         raise ValueError(
             f"Признаки ({len(feat_df)} ячеек) не совпадают по размеру со "
@@ -332,14 +357,16 @@ def permutation_significance(
     }
 
 
-def run_leave_one_object_out_cv(seed: int | None = None) -> tuple[pd.DataFrame, list[dict], pd.DataFrame]:
+def run_leave_one_object_out_cv(
+    seed: int | None = None, dataset: str = "v1",
+) -> tuple[pd.DataFrame, list[dict], pd.DataFrame]:
     """End-to-end: датасет → LOO-CV по 3 объектам → permutation-значимость.
 
     Возвращает ``(summary_df, loo_results, perm_df)``: сводную таблицу lift/coverage
     по объектам и площадям, сырые результаты LOO (для :func:`real_point_verification`)
     и таблицу значимости по объектам.
     """
-    X, labels_flat, coords, _feature_names, meta = build_dataset()
+    X, labels_flat, coords, _feature_names, meta = build_dataset(dataset)
     loo_results = leave_one_object_out(X, labels_flat, coords, seed=seed)
 
     perm_rows = []
@@ -360,7 +387,7 @@ def run_leave_one_object_out_cv(seed: int | None = None) -> tuple[pd.DataFrame, 
     return summary_df, loo_results, perm_df
 
 
-def seed_sweep(n_seeds: int | None = None) -> pd.DataFrame:
+def seed_sweep(n_seeds: int | None = None, dataset: str = "v1") -> pd.DataFrame:
     """Сид-свип LOO: распределение lift по сидам вместо точечной оценки.
 
     Смена сида меняет подвыборку фона и сиды членов RF/GB; измеренный шумовой
@@ -371,7 +398,7 @@ def seed_sweep(n_seeds: int | None = None) -> pd.DataFrame:
     из ``summary``. Агрегация — :func:`summarize_sweep`.
     """
     n_seeds = config.CRIT_SWEEP_N_SEEDS if n_seeds is None else n_seeds
-    X, labels_flat, coords, _feature_names, _meta = build_dataset()
+    X, labels_flat, coords, _feature_names, _meta = build_dataset(dataset)
     rows = []
     for s in range(n_seeds):
         for r in leave_one_object_out(X, labels_flat, coords, seed=s):
@@ -396,7 +423,9 @@ def summarize_sweep(sweep_df: pd.DataFrame, area: float | None = None) -> pd.Dat
     return out.round(3).reset_index()
 
 
-def fold_feature_importances(n_seeds: int = 5, buffer_m: float | None = None) -> pd.DataFrame:
+def fold_feature_importances(
+    n_seeds: int = 5, buffer_m: float | None = None, dataset: str = "v1",
+) -> pd.DataFrame:
     """Средние важности признаков по фолдам LOO (усреднение по ``n_seeds`` сидам).
 
     Диагностика «сигнал или шум»: если топ-признаки трёх фолдов не
@@ -404,7 +433,7 @@ def fold_feature_importances(n_seeds: int = 5, buffer_m: float | None = None) ->
     геологический сигнал. Возвращает таблицу признак × фолд (столбцы
     ``object_1..3``), отсортированную по средней важности.
     """
-    X, labels_flat, coords, feature_names, _meta = build_dataset()
+    X, labels_flat, coords, feature_names, _meta = build_dataset(dataset)
     acc: dict[int, list[np.ndarray]] = {}
     for s in range(n_seeds):
         for r in leave_one_object_out(X, labels_flat, coords, seed=s, buffer_m=buffer_m):
@@ -419,6 +448,7 @@ def fold_feature_importances(n_seeds: int = 5, buffer_m: float | None = None) ->
 def buffer_sensitivity(
     buffers_m: tuple[float, ...] = (5_000, 10_000, 15_000, 20_000, 25_000, 30_000),
     n_seeds: int = 5,
+    dataset: str = "v1",
 ) -> pd.DataFrame:
     """Кривая чувствительности lift к буферу вокруг контрольного объекта.
 
@@ -430,7 +460,7 @@ def buffer_sensitivity(
     означает, что объекты пространственно неразделимы на этом масштабе.
     По ``n_seeds`` сидов на буфер — точечные оценки шумят на ±30%.
     """
-    X, labels_flat, coords, _feature_names, _meta = build_dataset()
+    X, labels_flat, coords, _feature_names, _meta = build_dataset(dataset)
     rows = []
     for b in buffers_m:
         for s in range(n_seeds):

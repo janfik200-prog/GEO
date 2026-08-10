@@ -172,30 +172,59 @@ def _criterion_transform(distance, kind: str) -> np.ndarray:
     return d
 
 
+def taxonomy_weighted_distance(
+    dist_by_role: dict[str, np.ndarray], overrides: dict[str, np.ndarray] | None = None,
+    exclude: set[str] | None = None,
+) -> np.ndarray:
+    """Взвешенное L1-расстояние ГИС Интегро (мера Плюты, без итоговой нормировки).
+
+    ``dist_by_role`` — ``{роль: расстояние до фактора}`` для всех шести ролей
+    :data:`config.TAXONOMY_WEIGHTS`. Две независимые формы ablation:
+
+    * ``overrides`` ПОДМЕНЯЕТ вход роли на кандидата, вес роли сохраняется
+      (задачи № 6/7: заменить палеодолины/фации формализуемым кандидатом и
+      измерить согласие с нативным ``prognoz``, см. ``experiments/facies_significance.py``);
+    * ``exclude`` УБИРАЕТ роль из суммы целиком (столбец и вес не участвуют,
+      без переразбиения оставшихся весов — задача № 5: воспроизвести прогноз
+      без палеодолин, см. ``experiments/reproduce_without_paleo.py``).
+
+    Меньше = ближе к эталону-минимуму (та же полярность, что у нативного
+    ``prognoz``, ДО инверсии в :func:`compute_geo_score`).
+    """
+    overrides = overrides or {}
+    exclude = exclude or set()
+    columns, weights = [], []
+    for role, kind in config.TAXONOMY_TRANSFORMS.items():
+        if role in exclude:
+            continue
+        raw = overrides.get(role, dist_by_role[role])
+        t = _criterion_transform(np.asarray(raw, dtype=float), kind)
+        lo, hi = float(np.nanmin(t)), float(np.nanmax(t))
+        columns.append((t - lo) / (hi - lo) if hi > lo else np.zeros_like(t))  # min-max, эталон=0
+        weights.append(config.TAXONOMY_WEIGHTS[role])
+    z = np.column_stack(columns)               # критерии в [0, 1] (0 = на эталоне-минимуме)
+    w = np.asarray(weights, dtype=float)
+    return (np.abs(z) * w).sum(axis=1)         # взвешенное L1-расстояние до эталона (=0)
+
+
 def compute_geo_score(grid: gpd.GeoDataFrame, grid_shape: tuple[int, int]) -> gpd.GeoDataFrame:
     """Критериальный baseline по методу ГИС Интегро «Таксономия по критериям».
 
     Воспроизводит нативный расчёт ГИС Интегро (``data/Gis-integro/Расчет``):
     расстояние до фактора → степенная трансформация (симметризация гистограммы) →
     min-max нормировка каждого критерия в [0, 1] → взвешенное манхэттенское (L1)
-    расстояние до эталона-минимума (мера развития Плюты). Рецепт восстановлен по
-    нативному ``prognoz.prognoz.property`` (Spearman ≈ 0.98 с выходом их программы)
-    и подтверждён символами ``igk_prognose.dll`` (distance_manhattan, эталон, веса).
-    В ГИС Интегро меньшее значение перспективнее; здесь шкала инвертируется
-    (больше = лучше), чтобы baseline сравнивался так же, как ML-прогноз.
+    расстояние до эталона-минимума (мера развития Плюты, :func:`taxonomy_weighted_distance`).
+    Рецепт восстановлен по нативному ``prognoz.prognoz.property`` (Spearman ≈ 0.98
+    с выходом их программы) и подтверждён символами ``igk_prognose.dll``
+    (distance_manhattan, эталон, веса). В ГИС Интегро меньшее значение
+    перспективнее; здесь шкала инвертируется (больше = лучше), чтобы baseline
+    сравнивался так же, как ML-прогноз.
 
     Параметры — :data:`config.TAXONOMY_TRANSFORMS` и :data:`config.TAXONOMY_WEIGHTS`.
     Не входит в признаки модели — используется только для валидации.
     """
-    columns, weights = [], []
-    for role, kind in config.TAXONOMY_TRANSFORMS.items():
-        t = _criterion_transform(grid[f"dist_{role}"].to_numpy(), kind)
-        lo, hi = float(t.min()), float(t.max())
-        columns.append((t - lo) / (hi - lo) if hi > lo else np.zeros_like(t))  # min-max, эталон=0
-        weights.append(config.TAXONOMY_WEIGHTS[role])
-    z = np.column_stack(columns)               # критерии в [0, 1] (0 = на эталоне-минимуме)
-    w = np.asarray(weights, dtype=float)
-    c = (np.abs(z) * w).sum(axis=1)            # взвешенное L1-расстояние до эталона (=0)
+    dist_by_role = {role: grid[f"dist_{role}"].to_numpy() for role in config.TAXONOMY_TRANSFORMS}
+    c = taxonomy_weighted_distance(dist_by_role)
     dist = c / (c.mean() + 2.0 * c.std())       # нормировка Плюты: меньше = ближе к эталону
     grid["taxonomy_distance"] = dist            # нативная шкала ГИС Интегро (меньше = лучше)
     grid["geo_score_raw"] = -dist               # инверсия: больше = перспективнее

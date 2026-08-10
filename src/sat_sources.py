@@ -112,7 +112,7 @@ def fetch_s1(meta, log=None) -> tuple[pd.DataFrame, list]:
 
 
 # ---------------------------------------------------------------- Landsat 8/9
-def _l8_mask(item, meta, res_m):
+def l8_mask(item, meta, res_m):
     """Маска качества Landsat по битам ``qa_pixel`` (облако, тень, снег)."""
     qa = stac_grid.read_on_grid(item, "qa_pixel", meta, res_m, nearest=True)
     bad = np.zeros(qa.shape, dtype=bool)
@@ -134,7 +134,7 @@ def fetch_l8(meta, log=None) -> tuple[pd.DataFrame, list]:
             f"годы {sorted({i.datetime.year for i in items})}")
     from cache_paths import L8_ANABAR
 
-    comp, n_obs = _composite(items, L8_BANDS, L8_ANABAR, meta, log, mask_fn=_l8_mask)
+    comp, n_obs = _composite(items, L8_BANDS, L8_ANABAR, meta, log, mask_fn=l8_mask)
     a, b = config.L8_SR_SCALE
     lay = {k: comp[k] * a + b for k in L8_BANDS if k != "lwir11"}
     ratios = {n: _ratio(lay, num, den) for n, (num, den) in L8_RATIOS.items()}

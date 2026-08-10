@@ -195,6 +195,35 @@ def build_catchments(df: pd.DataFrame, meta, point_idx: np.ndarray,
     return out
 
 
+def flow_accumulation(rec: np.ndarray) -> np.ndarray:
+    """Число ячеек в водосборе КАЖДОЙ ячейки (включая её саму), O(n).
+
+    Дерево стока ``rec`` ациклично (``fill_sinks`` гарантирует строго убывающий
+    путь к выходу), поэтому проход по Кану: сначала обрабатываются истоки —
+    ячейки без единого притока, — их вклад передаётся приёмнику, а приёмник
+    открывается, когда обработаны все его притоки. Даёт то же число, что и
+    покомпонентный :func:`upstream_catchment` для каждой ячейки листа разом, но
+    за один линейный проход вместо O(n) обходов.
+    """
+    n = rec.size
+    acc = np.ones(n, dtype=np.int64)
+    indeg = np.zeros(n, dtype=np.int64)
+    has_rec = rec >= 0
+    np.add.at(indeg, rec[has_rec], 1)
+    queue = list(np.flatnonzero(indeg == 0))
+    head = 0
+    while head < len(queue):
+        i = queue[head]
+        head += 1
+        r = rec[i]
+        if r >= 0:
+            acc[r] += acc[i]
+            indeg[r] -= 1
+            if indeg[r] == 0:
+                queue.append(int(r))
+    return acc
+
+
 def catchment_capture(score: np.ndarray, catchments: list[np.ndarray],
                       area: float | None = None,
                       pool: np.ndarray | None = None) -> float:

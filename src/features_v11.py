@@ -28,7 +28,14 @@ GRADIENT_REDUNDANT: tuple[str, ...] = ("gm_gr_1G_25", "gm_mag_1G_25")
 # зависимость обнуляла собственное значение корреляционной матрицы (cond ~4e12) и
 # делала MinCovDet/PCA численно шаткими. Оставляем разложение, убираем сумму.
 FIELD_REDUNDANT: tuple[str, ...] = ("gm_gr_all", "gm_mg_all")
-# Поля направлений: и сырые углы (parquet), и sin/cos-развёртки (npz-матрица).
+# Поля направлений: азимут горизонтального градиента, завёрнутый на ±180°
+# (аудит признаков, п. 2.1: −179.95° и +179.83° численно максимально далеки,
+# хотя это почти одно направление). Раскодируются в осевую пару cos(2θ)/sin(2θ)
+# ниже в ladder_features — ОСЕВУЮ, а не векторную (sin θ/cos θ как для полярных
+# координат): градиент «на северо-восток» и «на юго-запад» задают одну и ту же
+# линейную структуру, обычная (не удвоенная) sin/cos-развёртка их бы развела.
+# Сырые углы (parquet) и одинарные sin/cos (если появятся) всё равно убираются
+# из base — они несут тот же завёрнутый разрыв.
 ANGLE_BASES: tuple[str, ...] = ("gm_gr_1GFI_25", "gm_mag_1GFI_25")
 # Сырые DN Landsat, заменяемые отношениями (ls_ch6 — тепловой, остаётся).
 LS_RAW: tuple[str, ...] = ("ls_ch1", "ls_ch2", "ls_ch3", "ls_ch4", "ls_ch5", "ls_ch7")
@@ -49,9 +56,11 @@ def ladder_features(df: pd.DataFrame, include_dist: bool = False) -> pd.DataFram
     База — независимые признаки :func:`src.cell_mask.feature_columns` (тот
     остаётся источником для маски валидности), далее:
 
-    * убраны избыточные градиентные колонки (``GRADIENT_REDUNDANT``), поля
-      направлений 1GFI в любом виде (сырой угол и ``_sin``/``_cos``) и суммы
+    * убраны избыточные градиентные колонки (``GRADIENT_REDUNDANT``) и суммы
       полей (``FIELD_REDUNDANT``: поле = flt_35 + ost_35);
+    * поля направлений 1GFI (``ANGLE_BASES``) перекодированы осево —
+      ``<имя>_cos2``/``<имя>_sin2`` = cos(2θ)/sin(2θ) — вместо разрыва на
+      ±180° у сырого угла; сырой угол убран (см. аудит признаков, п. 2.1);
     * сырые DN Landsat (кроме теплового ``ls_ch6``) заменены отношениями,
       устойчивыми к освещению/теням: ``ls_r31`` = ch3/ch1 (оксиды железа),
       ``ls_r57`` = ch5/ch7 (глины/гидроксилы), ``ls_r54`` = ch5/ch4
@@ -75,6 +84,12 @@ def ladder_features(df: pd.DataFrame, include_dist: bool = False) -> pd.DataFram
         out["ls_r57"] = _safe_ratio(ch[5], ch[7])
         out["ls_r54"] = _safe_ratio(ch[5], ch[4])
         out["ls_ndvi"] = _safe_ratio(ch[4] - ch[3], ch[4] + ch[3])
+
+    for name in ANGLE_BASES:
+        if name in df.columns:
+            rad2 = 2.0 * np.deg2rad(df[name].to_numpy(dtype=float))
+            out[f"{name}_cos2"] = np.cos(rad2)
+            out[f"{name}_sin2"] = np.sin(rad2)
 
     if "relief_m" in out.columns:
         out["relief_m"] = fill_relief_from_dem(df)

@@ -38,12 +38,28 @@ def test_ladder_features_drops_redundant_and_raw_landsat():
     feat = features_v11.ladder_features(_toy_df())
     cols = set(feat.columns)
     assert not cols & {"gm_gr_1G_25", "gm_mag_1G_25"}
-    assert not any("1GFI" in c for c in cols)                # угол в любом виде
+    assert not cols & set(features_v11.ANGLE_BASES)           # сырой угол убран
+    assert {"gm_gr_1GFI_25_cos2", "gm_gr_1GFI_25_sin2",
+            "gm_mag_1GFI_25_cos2", "gm_mag_1GFI_25_sin2"} <= cols  # осевая пара
     assert not cols & set(features_v11.LS_RAW)               # сырые DN заменены
     assert {"ls_r31", "ls_r57", "ls_r54", "ls_ndvi", "ls_ch6"} <= cols
     assert {"gm_gr_1GX_25", "gm_gr_1GY_25", "relief_m"} <= cols
     assert not cols & set(features_v11.FIELD_REDUNDANT)   # поле = flt + ost
     assert "dist_tect1" not in cols and "mask_svita" not in cols
+
+
+def test_ladder_features_angle_axial_encoding():
+    df = _toy_df()
+    feat = features_v11.ladder_features(df)
+    theta = np.deg2rad(df["gm_gr_1GFI_25"].to_numpy())
+    np.testing.assert_allclose(feat["gm_gr_1GFI_25_cos2"], np.cos(2 * theta), atol=1e-10)
+    np.testing.assert_allclose(feat["gm_gr_1GFI_25_sin2"], np.sin(2 * theta), atol=1e-10)
+    # осевая пара: направления, отличающиеся на 180°, дают одну и ту же точку
+    same = df.copy()
+    same["gm_gr_1GFI_25"] = (df["gm_gr_1GFI_25"] + 180.0) % 360.0
+    feat_same = features_v11.ladder_features(same)
+    np.testing.assert_allclose(feat_same["gm_gr_1GFI_25_cos2"], feat["gm_gr_1GFI_25_cos2"], atol=1e-8)
+    np.testing.assert_allclose(feat_same["gm_gr_1GFI_25_sin2"], feat["gm_gr_1GFI_25_sin2"], atol=1e-8)
 
 
 def test_ladder_features_include_dist_toggle():

@@ -108,6 +108,11 @@ def _azimuth_class(segments, n_classes: int = 4) -> np.ndarray:
     return np.floor(((np.degrees(2 * ang) % 360.0) / 360.0) * n_classes).astype(int)
 
 
+def density_raster(segments, shape) -> np.ndarray:
+    """Плотность линий (сумма длины в пикселях, без нормировки) — для сверки половин выборки."""
+    return _draw(segments, shape)[0]
+
+
 def line_rasters(segments, shape, res_m: float | None = None) -> dict[str, np.ndarray]:
     """Растры линеаментов: длина, узлы, расстояние, ориентация."""
     from scipy.ndimage import distance_transform_edt, uniform_filter
@@ -159,18 +164,18 @@ def azimuth_reproducibility(elev: np.ndarray, res_m: float | None = None,
             "overlap_frac": float(((a > 0) & (b > 0)).sum() / max(1, both.sum()))}
 
 
-def lineament_features(meta: integro_grid.GridMeta,
-                       elev: np.ndarray | None = None) -> pd.DataFrame:
-    """Признаки линеаментов на ячейки сетки (C-порядок, как датасет)."""
-    res_m = config.TER_RES_M
-    k = int(round(meta.dx / res_m))
-    pad = config.TER_PAD_PX
-    if elev is None:
-        elev = terrain_v2.projected_dem(meta)
-    elev = np.where(np.isfinite(elev), elev, np.nanmedian(elev))
+def rasters_to_cell_features(meta: integro_grid.GridMeta, r: dict[str, np.ndarray],
+                             prefix: str, res_m: float | None = None,
+                             pad: int = 0) -> pd.DataFrame:
+    """Растры :func:`line_rasters` -> признаки на ячейки сетки (общее для рельефа и снимков).
 
-    segments = extract_lines(edge_map(elev, res_m=res_m))
-    r = line_rasters(segments, elev.shape, res_m)
+    ``pad`` — поле в пикселях рабочего растра ДО начала сетки (у рельефа рабочий
+    растр шире целевого на :data:`config.TER_PAD_PX` для оконных операций
+    отмывки; у спутниковых композитов рабочий растр посажен ровно под сетку,
+    ``pad=0``).
+    """
+    res_m = res_m or config.TER_RES_M
+    k = int(round(meta.dx / res_m))
 
     def blocks(a):
         core = a[pad:pad + meta.prf * k, pad:pad + meta.pic * k]
@@ -185,14 +190,28 @@ def lineament_features(meta: integro_grid.GridMeta,
         aniso = np.hypot(s2, c2) / n
         dir_s, dir_c = s2 / np.hypot(s2, c2), c2 / np.hypot(s2, c2)
     out = {
-        "lin_dens": (length_km / cell_km2).ravel(),
-        "lin_node_dens": blocks(r["nodes"]).mean(axis=(1, 3)).ravel(),
-        "lin_dist": blocks(r["dist"]).mean(axis=(1, 3)).ravel(),
-        "lin_aniso_r": np.nan_to_num(aniso, nan=0.0).ravel(),
-        "lin_dir_sin": np.nan_to_num(dir_s, nan=0.0).ravel(),
-        "lin_dir_cos": np.nan_to_num(dir_c, nan=0.0).ravel(),
+        f"{prefix}dens": (length_km / cell_km2).ravel(),
+        f"{prefix}node_dens": blocks(r["nodes"]).mean(axis=(1, 3)).ravel(),
+        f"{prefix}dist": blocks(r["dist"]).mean(axis=(1, 3)).ravel(),
+        f"{prefix}aniso_r": np.nan_to_num(aniso, nan=0.0).ravel(),
+        f"{prefix}dir_sin": np.nan_to_num(dir_s, nan=0.0).ravel(),
+        f"{prefix}dir_cos": np.nan_to_num(dir_c, nan=0.0).ravel(),
     }
     return pd.DataFrame(out)
+
+
+def lineament_features(meta: integro_grid.GridMeta,
+                       elev: np.ndarray | None = None) -> pd.DataFrame:
+    """Признаки линеаментов на ячейки сетки (C-порядок, как датасет)."""
+    res_m = config.TER_RES_M
+    pad = config.TER_PAD_PX
+    if elev is None:
+        elev = terrain_v2.projected_dem(meta)
+    elev = np.where(np.isfinite(elev), elev, np.nanmedian(elev))
+
+    segments = extract_lines(edge_map(elev, res_m=res_m))
+    r = line_rasters(segments, elev.shape, res_m)
+    return rasters_to_cell_features(meta, r, "lin_", res_m=res_m, pad=pad)
 
 
 LINEAMENT_COLS: tuple[str, ...] = ("lin_dens", "lin_node_dens", "lin_dist",

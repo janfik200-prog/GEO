@@ -116,7 +116,13 @@ def href_on_grid(href: str, meta: integro_grid.GridMeta,
     ASTER TIR лежат обычными GeoTIFF по прямым ссылкам, а посадка на сетку нужна
     ровно та же. ``env`` — переменные GDAL на время чтения (у LP DAAC это
     авторизация Earthdata через ``_netrc`` и файл cookies).
+
+    Чтение с сетевого COG изредка обрывается транзиентно (``RasterioIOError``
+    без деталей — обрыв соединения, а не битые данные); 3 попытки с паузой
+    дешевле, чем терять всю сцену и весь блок сенсора из-за одного сбоя.
     """
+    import time
+
     import rasterio
     from pyproj import CRS
     from rasterio.enums import Resampling
@@ -127,14 +133,22 @@ def href_on_grid(href: str, meta: integro_grid.GridMeta,
     if proj4 is None:
         raise RuntimeError("proj4 целевой сетки не найден (sidecar .pj4)")
     transform, height, width = grid_transform(meta, res_m)
-    with rasterio.Env(**(env or {})):
-        with rasterio.open(href) as src:
-            nd = src.nodata if nodata is None else nodata
-            with WarpedVRT(src, crs=CRS.from_proj4(proj4), transform=transform,
-                           height=height, width=width, dtype="float32",
-                           resampling=Resampling.nearest if nearest else Resampling.average,
-                           src_nodata=nd, nodata=np.nan) as vrt:
-                return vrt.read(band).astype("float32")
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            with rasterio.Env(**(env or {})):
+                with rasterio.open(href) as src:
+                    nd = src.nodata if nodata is None else nodata
+                    with WarpedVRT(src, crs=CRS.from_proj4(proj4), transform=transform,
+                                   height=height, width=width, dtype="float32",
+                                   resampling=Resampling.nearest if nearest else Resampling.average,
+                                   src_nodata=nd, nodata=np.nan) as vrt:
+                        return vrt.read(band).astype("float32")
+        except rasterio.errors.RasterioIOError as exc:
+            last_exc = exc
+            if attempt < 2:
+                time.sleep(5 * (attempt + 1))
+    raise last_exc
 
 
 def read_on_grid(item, asset: str, meta: integro_grid.GridMeta,
@@ -166,13 +180,29 @@ def scene_on_grid(item, bands: dict[str, tuple[str, int]],
 
     ``mask_fn(item, meta, res_m)`` возвращает булеву маску «пиксель годен»;
     результат применяется ко всем каналам и в кэш попадает уже маскированным.
+
+    Имя файла кэша учитывает форму сетки (``meta.prf x meta.pic``): один и тот
+    же ``item.id`` может понадобиться на разных по размеру сетках (лист и
+    расширенная территория), а без разбора по форме массив с одной сетки тихо
+    подставлялся бы вместо другой при :func:`median_stack`. Старое имя без
+    формы (``legacy``) читается как резерв обратной совместимости — если его
+    форма совпадает с ожидаемой для текущей сетки, файл не перекачивается
+    заново.
     """
     res_m = res_m or config.SAT_RES_M
-    cache = cache_dir / f"{item.id}_{res_m:.0f}m.npz"
+    k = int(round(meta.dx / res_m))
+    expected_shape = (meta.prf * k, meta.pic * k)
+    cache = cache_dir / f"{item.id}_{res_m:.0f}m_{meta.prf}x{meta.pic}.npz"
+    legacy = cache_dir / f"{item.id}_{res_m:.0f}m.npz"
     have: dict[str, np.ndarray] = {}
-    if cache.exists():
-        with np.load(cache) as z:
-            have = {k: z[k] for k in z.files}
+    for path in (cache, legacy):
+        if not path.exists():
+            continue
+        with np.load(path) as z:
+            cand = {b: z[b] for b in z.files}
+        if cand and next(iter(cand.values())).shape == expected_shape:
+            have = cand
+            break
     need = [b for b in bands if b not in have]
     if not need:
         return {b: have[b] for b in bands}

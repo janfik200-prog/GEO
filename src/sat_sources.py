@@ -75,11 +75,21 @@ def _ratio(comp: dict[str, np.ndarray], num, den) -> np.ndarray:
 
 def _composite(items, bands, cache_dir, meta, log=None, mask_fn=None,
                nodata=None, min_obs=None):
-    """Скачать сцены на сетку (с кэшем) и свернуть в медианный композит."""
+    """Скачать сцены на сетку (с кэшем) и свернуть в медианный композит.
+
+    Сбой одной сцены (после ретраев в :func:`stac_grid.href_on_grid`) не
+    должен стоить всего композита — она пропускается, а не роняет весь блок
+    сенсора; медиана и так устойчива к недостающим наблюдениям.
+    """
     scenes = []
     for i, it in enumerate(items):
-        arr = stac_grid.scene_on_grid(it, bands, meta, cache_dir,
-                                      mask_fn=mask_fn, nodata=nodata)
+        try:
+            arr = stac_grid.scene_on_grid(it, bands, meta, cache_dir,
+                                          mask_fn=mask_fn, nodata=nodata)
+        except Exception as exc:
+            if log:
+                log(f"  сцена {i + 1}/{len(items)}: {it.id} — ПРОПУЩЕНА ({exc!r})")
+            continue
         scenes.append(arr)
         if log:
             log(f"  сцена {i + 1}/{len(items)}: {it.id}")

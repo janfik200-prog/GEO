@@ -134,25 +134,47 @@ def _grid_transform(meta: integro_grid.GridMeta, res_m: float):
 
 def scene_on_grid(scene: dict, meta: integro_grid.GridMeta,
                   res_m: float | None = None, use_cache: bool = True,
-                  apply_veg: bool | None = None) -> dict[str, np.ndarray]:
+                  apply_veg: bool | None = None,
+                  only_bands: list[str] | None = None) -> dict[str, np.ndarray]:
     """Каналы одной сцены на сетке листа, вне маски — NaN. Кэш на диск (npz).
 
     Читается через ``WarpedVRT``: перепроекция COG в метрику сетки идёт лениво,
     с диска тянутся только нужные тайлы нужного уровня обзора.
+
+    Имя файла кэша учитывает форму сетки (``meta.prf x meta.pic``): один и тот
+    же ``scene['id']`` может понадобиться на разных по размеру сетках (лист и
+    расширенная территория), а без разбора по форме массив с одной сетки тихо
+    подставлялся бы вместо другой при :func:`median_composite`. Старое имя без
+    формы (``legacy``) читается как резерв обратной совместимости.
+
+    ``only_bands`` — вернуть только эти каналы (кэш и сеть всё равно читаются
+    и пишутся целиком, чтобы не ломать логику докачки недостающих каналов
+    ниже) — так вызывающая сторона может держать в памяти один канал сразу
+    по всем сценам, а не все каналы разом (см. попанальный проход в
+    :func:`median_composite` на большой сетке).
     """
     from cache_paths import S2_ANABAR
 
     res_m = res_m or config.S2_RES_M
-    cache = S2_ANABAR / f"{scene['id']}_{res_m:.0f}m.npz"
+    k = int(round(meta.dx / res_m))
+    expected_shape = (meta.prf * k, meta.pic * k)
+    cache = S2_ANABAR / f"{scene['id']}_{res_m:.0f}m_{meta.prf}x{meta.pic}.npz"
+    legacy = S2_ANABAR / f"{scene['id']}_{res_m:.0f}m.npz"
     want = list(config.S2_BANDS.values())
     have: dict[str, np.ndarray] = {}
-    if use_cache and cache.exists():
-        with np.load(cache) as z:
-            have = {k: z[k] for k in z.files}
+    if use_cache:
+        for path in (cache, legacy):
+            if not path.exists():
+                continue
+            with np.load(path) as z:
+                cand = {b: z[b] for b in z.files}
+            if cand and next(iter(cand.values())).shape == expected_shape:
+                have = cand
+                break
         # Список каналов растёт со временем (так добавился красный край): сцена
         # не перекачивается целиком, дочитываются только недостающие каналы.
-        if all(b in have for b in want):
-            return {b: have[b] for b in want}
+        if have and all(b in have for b in want):
+            return {b: have[b] for b in (only_bands or want)}
 
     import rasterio
     from rasterio.enums import Resampling
@@ -185,7 +207,7 @@ def scene_on_grid(scene: dict, meta: integro_grid.GridMeta,
     have.update(bands)
     if use_cache:
         np.savez_compressed(cache, **have)
-    return {b: have[b] for b in want}
+    return {b: have[b] for b in (only_bands or want)}
 
 
 def median_composite(scenes: list[dict], meta: integro_grid.GridMeta,
@@ -196,21 +218,42 @@ def median_composite(scenes: list[dict], meta: integro_grid.GridMeta,
     Медиана, а не среднее: одиночное облако или снежник смещают среднее, но не
     медиану. Пиксели с числом наблюдений меньше ``S2_MIN_OBS`` объявляются
     невалидными — по двум наблюдениям медиана ничего не фильтрует.
+
+    Сбой чтения одной сцены (после ретраев в :func:`stac_grid.href_on_grid`)
+    пропускается, а не роняет весь композит.
+
+    Обрабатывается по одному каналу за раз (``only_bands=[b]`` в
+    :func:`scene_on_grid`), а не все каналы всех сцен разом: на большой сетке
+    (широкая территория) все 9 каналов x 480 сцен в памяти одновременно —
+    десятки ГБ (наблюдался процесс на ~24 ГБ и падение без трейсбека,
+    консистентно на одной и той же сцене независимо от времени прогона —
+    признак упора в физическую память, а не сетевого/системного сбоя).
+    Попанальный проход держит в памяти одновременно только один канал по
+    всем сценам, ценой повторного (но дешёвого — сцена уже закэширована на
+    диск) чтения кэша на каждый канал.
     """
     res_m = res_m or config.S2_RES_M
-    stack: dict[str, list[np.ndarray]] = {b: [] for b in config.S2_BANDS.values()}
-    for i, sc in enumerate(scenes):
-        arr = scene_on_grid(sc, meta, res_m)
-        for b in stack:
-            stack[b].append(arr[b])
-        if progress:
-            progress(i + 1, len(scenes), sc)
+    bands = list(config.S2_BANDS.values())
     comp, n_obs = {}, None
-    for b, layers in stack.items():
+    for bi, b in enumerate(bands):
+        layers = []
+        for i, sc in enumerate(scenes):
+            try:
+                arr = scene_on_grid(sc, meta, res_m, only_bands=[b])
+            except Exception as exc:
+                if bi == 0:
+                    print(f"  сцена {i + 1}/{len(scenes)}: {sc['id']} — ПРОПУЩЕНА ({exc!r})",
+                          flush=True)
+                continue
+            layers.append(arr[b])
+            if progress and bi == 0:
+                progress(i + 1, len(scenes), sc)
         cube = np.stack(layers)
+        del layers
         with np.errstate(all="ignore"):
             med = np.nanmedian(cube, axis=0)
         cnt = np.isfinite(cube).sum(axis=0)
+        del cube
         n_obs = cnt if n_obs is None else np.minimum(n_obs, cnt)
         comp[b] = med
     for b in comp:

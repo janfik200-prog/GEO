@@ -102,7 +102,30 @@ def training_features(dataset: str = "v1") -> pd.DataFrame:
         drop = [c for c in df.columns
                 if features_v2.feature_group(c) in V5_EXCLUDE_GROUPS or c in V5_EXCLUDE_COLS]
         return df.drop(columns=drop)
-    raise ValueError(f"неизвестный dataset={dataset!r}, ожидается 'v1' или 'v5'")
+    if dataset == "v5_rebuilt":
+        # dataset_v5_rebuilt.parquet: пересборка после ревью внешней чистки
+        # (data/processed/dataset_v5_rebuilt_notes.md) — оставлена только
+        # target-free корреляционная чистка (|r|>0.95, пересчитана самостоятельно
+        # с проверкой прямой, а не транзитивной корреляции с представителем
+        # кластера), возвращены 54 признака, отсеянных внешним шумовым фильтром
+        # на CV без пространственного буфера (недоверие подтверждено ревью
+        # model-critic). Та же логика исключения групп, что и в "v5".
+        df = pd.read_parquet(config.PROCESSED_DIR / "dataset_v5_rebuilt.parquet")
+        drop = [c for c in df.columns
+                if features_v2.feature_group(c) in V5_EXCLUDE_GROUPS or c in V5_EXCLUDE_COLS]
+        return df.drop(columns=drop)
+    if dataset == "v6":
+        # dataset_v6.parquet: повторная проверка v5_rebuilt на шумы/корреляцию/
+        # помехи (data/processed/dataset_v6_notes.md, 17.08.2026) — убраны
+        # навсегда служебные колонки покрытия (*_valid_frac/*_n_obs, риск
+        # утечки), 33 шумовых признака (честная permutation importance <=0
+        # на 8 leave-one-strip-out фолдах) и остаточный дубль l8_green. Та же
+        # логика исключения групп geo/geo2, что и в v5/v5_rebuilt.
+        df = pd.read_parquet(config.PROCESSED_DIR / "dataset_v6.parquet")
+        drop = [c for c in df.columns
+                if features_v2.feature_group(c) in V5_EXCLUDE_GROUPS or c in V5_EXCLUDE_COLS]
+        return df.drop(columns=drop)
+    raise ValueError(f"неизвестный dataset={dataset!r}, ожидается 'v1', 'v5', 'v5_rebuilt' или 'v6'")
 
 
 def build_dataset(dataset: str = "v1") -> tuple[np.ndarray, np.ndarray, np.ndarray, list[str], integro_grid.GridMeta]:

@@ -17,10 +17,13 @@ PowerPoint при показе, поэтому вылез ли текст из �
   признаков — предупреждение, решает человек).
 
 Выгрузка слайдов в PNG — только для визуальной сверки, во временную папку.
+Сравнение `--compare` показывает, что в файле поправлено вручную относительно
+свежей сборки скрипта (без PowerPoint, по самому файлу).
 
 Запуск из корня:
     python -X utf8 -m src.slide_check "docs II presentation/X.pptx"
     python -X utf8 -m src.slide_check X.pptx --slides 3,5 --render <папка>
+    python -X utf8 -m src.slide_check X.pptx --compare <свежая сборка>.pptx
 Код возврата 1, если есть ошибки.
 """
 import argparse
@@ -346,6 +349,118 @@ def render(pptx, outdir, slides=None, width=1600):
     return paths
 
 
+# ------------------------------------------------------------------ сравнение
+def _signature(pptx):
+    """Слайды как списки (вид, ключ, текст, рамка в дюймах) — по файлу, без COM.
+
+    Ключ текста — сам текст, картинки — хеш содержимого; плашки без текста
+    не сравниваются (фоны и строки таблиц дают только шум).
+    """
+    import hashlib
+    from pptx import Presentation
+    emu = 914400.0
+    deck = []
+
+    def walk(shapes, out):
+        for sh in shapes:
+            if sh.shape_type == 6:
+                walk(sh.shapes, out)
+                continue
+            box = tuple(round((v or 0) / emu, 2) for v in
+                        (sh.left, sh.top, sh.width, sh.height))
+            if sh.shape_type == 13:
+                key = hashlib.sha1(sh.image.blob).hexdigest()[:10]
+                out.append(("picture", key, "", box))
+            elif sh.has_text_frame and sh.text_frame.text.strip():
+                text = " ".join(sh.text_frame.text.split())
+                out.append(("text", text, text, box))
+
+    for slide in Presentation(str(pptx)).slides:
+        items = []
+        walk(slide.shapes, items)
+        deck.append(items)
+    return deck
+
+
+def _title(items):
+    texts = [t for kind, _, t, box in items if kind == "text" and box[1] < 1.0]
+    return _short(max(texts, key=len)) if texts else "(без заголовка)"
+
+
+def _text_delta(old, new, limit=3):
+    """Изменённые фрагменты текста: «было» -> «стало», с парой слов контекста."""
+    from difflib import SequenceMatcher
+    a, b = old.split(), new.split()
+    parts = []
+    for op, i1, i2, j1, j2 in SequenceMatcher(None, a, b,
+                                              autojunk=False).get_opcodes():
+        if op == "equal":
+            continue
+        ctx = " ".join(a[max(0, i1 - 2):i1])
+        was = " ".join(a[i1:i2]) or "∅"
+        now = " ".join(b[j1:j2]) or "∅"
+        parts.append("…%s [%s -> %s]" % (ctx, _short(was, 80), _short(now, 80)))
+    more = len(parts) - limit
+    return "; ".join(parts[:limit]) + (" (и ещё %d)" % more if more > 0 else "")
+
+
+def compare(built, current, move_tol=0.03):
+    """Чем файл `current` (правленный вручную) отличается от сборки `built`.
+
+    Слайды сопоставляются по тексту (удалённые и вставленные вручную слайды
+    сдвигают нумерацию), внутри слайда — надписи по тексту, картинки по
+    содержимому. Возвращает строки отчёта; пустой список — отличий нет.
+    """
+    from difflib import SequenceMatcher
+    a, b = _signature(built), _signature(current)
+    sig = lambda items: " ".join(t for _, _, t, _ in items)[:400]
+    sm = SequenceMatcher(None, [sig(x) for x in a], [sig(x) for x in b],
+                         autojunk=False)
+    pairs, out = [], []
+    for op, i1, i2, j1, j2 in sm.get_opcodes():
+        if op == "equal" or (op == "replace" and i2 - i1 == j2 - j1):
+            pairs += list(zip(range(i1, i2), range(j1, j2)))
+            continue
+        for i in range(i1, i2):
+            out.append("слайд сборки %d %s — в файле нет (удалён вручную)"
+                       % (i + 1, _title(a[i])))
+        for j in range(j1, j2):
+            out.append("слайд файла %d %s — в сборке нет (добавлен вручную)"
+                       % (j + 1, _title(b[j])))
+    for i, j in pairs:
+        where = ("слайд %d" % (j + 1) if i == j
+                 else "слайд сборки %d = файла %d" % (i + 1, j + 1))
+        rest = list(b[j])
+        for kind, key, text, box in a[i]:
+            hit = next((x for x in rest if x[0] == kind and x[1] == key), None)
+            if hit is None and kind == "text":
+                cand = [(SequenceMatcher(None, text, x[2]).ratio(), x)
+                        for x in rest if x[0] == "text"]
+                score, hit = max(cand, default=(0, None), key=lambda c: c[0])
+                if hit is not None and score >= 0.6:
+                    out.append("%s: текст %s изменён: %s"
+                               % (where, _short(text, 30),
+                                  _text_delta(text, hit[2])))
+                else:
+                    hit = None
+            if hit is None:
+                what = _short(text) if kind == "text" else "картинка"
+                out.append("%s: %s — в файле нет" % (where, what))
+                continue
+            rest.remove(hit)
+            d = [h - g for g, h in zip(box, hit[3])]
+            if max(abs(v) for v in d) > move_tol:
+                what = _short(text) if kind == "text" else "картинка"
+                out.append("%s: %s сдвинут/изменён по размеру: "
+                           "x%+.2f y%+.2f ш%+.2f в%+.2f дюйма"
+                           % (where, what, *d))
+        for kind, key, text, box in rest:
+            what = _short(text) if kind == "text" else "картинка"
+            out.append("%s: %s — добавлено вручную (x %.2f, y %.2f дюйма)"
+                       % (where, what, box[0], box[1]))
+    return out
+
+
 def _parse_slides(arg):
     if not arg:
         return None
@@ -368,8 +483,17 @@ def main(argv=None):
     ap.add_argument("--width", type=int, default=1600)
     ap.add_argument("--no-check", action="store_true",
                     help="только выгрузка, без проверок")
+    ap.add_argument("--compare", metavar="СБОРКА",
+                    help="сравнить файл со свежей сборкой скрипта: что "
+                         "поправлено вручную")
     args = ap.parse_args(argv)
     slides = _parse_slides(args.slides)
+    if args.compare:
+        diff = compare(args.compare, args.pptx)
+        for line in diff:
+            print(line)
+        print("итого: отличий %d" % len(diff))
+        return 0
     errors = 0
     if not args.no_check:
         issues = check(args.pptx, slides)

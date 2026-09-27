@@ -21,6 +21,7 @@ python-pptx (`Inches(...)`); нумерацию и шапку ведёт `Deck`.
 
 Проверка готового файла — `src/slide_check.py`.
 """
+import os
 from pathlib import Path
 
 from lxml import etree
@@ -139,7 +140,12 @@ class Deck:
         return s, top
 
     def save(self, path):
-        path = Path(path)
+        """Сохранить колоду; переменная окружения DECK_OUT подменяет путь.
+
+        Подмена нужна, чтобы собрать колоду во временную папку и сравнить со
+        вручную поправленным файлом, не затирая его.
+        """
+        path = Path(os.environ.get("DECK_OUT") or path)
         self.prs.save(str(path))
         try:
             shown = path.relative_to(ROOT)

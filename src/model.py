@@ -12,7 +12,12 @@ positive — ТОЛЬКО реальные рудопроявления, фон 
 
 import geopandas as gpd
 import numpy as np
-from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
+from sklearn.base import BaseEstimator, ClassifierMixin
+from sklearn.ensemble import (
+    GradientBoostingClassifier,
+    HistGradientBoostingClassifier,
+    RandomForestClassifier,
+)
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import average_precision_score, roc_auc_score
 from sklearn.pipeline import Pipeline
@@ -105,6 +110,88 @@ class BackgroundEnsemble:
     def feature_importances_(self) -> np.ndarray:
         """Усреднённая важность признаков по всем членам ансамбля (RF и GB)."""
         return np.mean([m.feature_importances_ for m in self.models_], axis=0)
+
+
+class HistBackgroundEnsemble(ClassifierMixin, BaseEstimator):
+    """Ансамбль ``HistGradientBoostingClassifier`` по подвыборкам фона.
+
+    Отличие от :class:`BackgroundEnsemble` — базовый алгоритм: вместо пары
+    RF+GB на каждом раунде обучается один гистограммный бустинг. Причина не в
+    точности, а в пропусках: ``RandomForestClassifier``/``GradientBoostingClassifier``
+    не принимают NaN, поэтому вызывающий код был вынужден делать ``fillna(0)``, а
+    для отражательных индексов (ASTER, Sentinel-2) ноль — не нейтральное
+    значение, а край шкалы: на границах покрытия съёмки это давало артефактные
+    контрасты, неотличимые от геологических. ``HistGradientBoostingClassifier``
+    учит направление ветвления для пропусков на каждом сплите, поэтому NaN
+    передаётся в модель как есть.
+
+    Схема усреднения по фону сохранена (``n_rounds`` подвыборок доли ``bg_frac``):
+    она снижает дисперсию от произвольного выбора фоновых ячеек. ``class_weight
+    ="balanced"`` компенсирует дисбаланс классов, который в схеме
+    presence-background всегда сильный.
+
+    Наследуется от sklearn ``ClassifierMixin``/``BaseEstimator``: без этого
+    :func:`sklearn.inspection.permutation_importance` падает на проверке
+    ``is_regressor`` (нужны ``__sklearn_tags__``/``get_params``), тем же
+    способом, что и оценщик в `experiments/forecast_dense.py`. Атрибута
+    ``feature_importances_`` у гистограммного бустинга нет — важность считается
+    перестановками на стороне вызова.
+    """
+
+    def __init__(self, n_rounds: int | None = None, bg_frac: float | None = None,
+                 random_state: int | None = None, hgb_params: dict | None = None):
+        self.n_rounds = n_rounds or config.ENS_N_ROUNDS
+        self.bg_frac = bg_frac or config.ENS_BG_FRAC
+        self.random_state = config.RANDOM_STATE if random_state is None else random_state
+        #: Переопределения параметров бустинга поверх значений `config` (для
+        #: вложенного подбора внутри обучающих полос; по умолчанию — конфиг).
+        self.hgb_params = hgb_params
+        self.models_: list = []
+
+    def _hgb_kwargs(self) -> dict:
+        params = dict(max_iter=config.HGB_MAX_ITER,
+                      learning_rate=config.HGB_LEARNING_RATE,
+                      max_leaf_nodes=config.HGB_MAX_LEAF_NODES,
+                      min_samples_leaf=config.HGB_MIN_SAMPLES_LEAF,
+                      l2_regularization=config.HGB_L2)
+        params.update(self.hgb_params or {})
+        return params
+
+    def fit(self, X, y):
+        X = np.asarray(X, dtype=float)
+        y = np.asarray(y).astype(int)
+        rng = np.random.default_rng(self.random_state)
+        self.classes_ = np.unique(y)
+        pos_idx = np.where(y == 1)[0]
+        neg_idx = np.where(y == 0)[0]
+        n_draw = max(1, int(round(self.bg_frac * len(neg_idx))))
+        kwargs = self._hgb_kwargs()
+        self.models_ = []
+        for _ in range(self.n_rounds):
+            draw = rng.choice(neg_idx, size=min(n_draw, len(neg_idx)), replace=False)
+            idx = np.concatenate([pos_idx, draw])
+            model = HistGradientBoostingClassifier(
+                **kwargs,
+                early_stopping=False,
+                class_weight="balanced",
+                random_state=int(rng.integers(np.iinfo(np.int32).max)),
+            )
+            model.fit(X[idx], y[idx])
+            self.models_.append(model)
+        return self
+
+    def predict_proba(self, X):
+        X = np.asarray(X, dtype=float)
+        probs = np.mean([m.predict_proba(X)[:, 1] for m in self.models_], axis=0)
+        return np.column_stack([1.0 - probs, probs])
+
+    def predict(self, X):
+        return self.classes_[(self.predict_proba(X)[:, 1] >= 0.5).astype(int)]
+
+    def member_probas(self, X) -> np.ndarray:
+        """Матрица P(class=1) по каждому члену ансамбля: форма (n_members, n)."""
+        X = np.asarray(X, dtype=float)
+        return np.stack([m.predict_proba(X)[:, 1] for m in self.models_])
 
 
 def _make_ensemble() -> BackgroundEnsemble:

@@ -50,6 +50,30 @@ def load_prognoz_grid() -> tuple[integro_grid.GridMeta, np.ndarray]:
     return meta, arrays[config.CRIT_TARGET_PROPERTY]
 
 
+def training_positives(prognoz: np.ndarray, area: float | None = None) -> np.ndarray:
+    """Булева маска позитивов обучения — top-``area`` критериального прогноза.
+
+    Решение 01.09.2026: обучающая разметка выровнена с эталоном согласия
+    (``config.CREF_AREA``, top-10%), по которому в ``crit_reference``/
+    ``compare_methods``/``atypicality_*`` меряется согласие методов. Прежняя
+    разметка (абсолютный порог ``CRIT_TARGET_THRESHOLD`` = 0.15 плюс группировка
+    в ``CRIT_N_OBJECTS`` связных компонент) расходилась с ней в 5.2 раза: 440
+    ячеек против 2295. Три перспективные зоны top-10% крупнее 20 ячеек не
+    содержали НИ ОДНОГО позитива (80, 48 и 22 ячейки), а зона в 598 ячеек была
+    представлена лишь 50 — модель их не видела, но согласие с ней по ним
+    измерялось.
+
+    Порог — квантиль по всей сетке (не абсолютное значение): ровно тот же приём,
+    что в :func:`src.crit_reference.reference_mask`, чтобы обе разметки совпадали
+    по построению. Группировки в объекты и пространственного буфера здесь нет —
+    LOO-протокол закрыт (решение 20.08.2026), обучение идёт на всех ячейках
+    листа как на точках.
+    """
+    area = config.CREF_AREA if area is None else area
+    flat = np.asarray(prognoz, dtype=float).ravel()
+    return flat <= float(np.quantile(flat, area))
+
+
 def label_ore_objects(
     prognoz: np.ndarray,
     threshold: float | None = None,

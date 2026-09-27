@@ -53,7 +53,12 @@ def _tile_url(lat: int, lon: int) -> str:
     return f"https://copernicus-dem-30m.s3.amazonaws.com/{name}/{name}.tif"
 
 
-def projected_dem(meta: integro_grid.GridMeta) -> np.ndarray:
+def pad_px(res_m: float) -> int:
+    """Поле под оконные операции: постоянное в метрах, а не в пикселях."""
+    return int(round(config.TER_PAD_PX * config.TER_RES_M / res_m))
+
+
+def projected_dem(meta: integro_grid.GridMeta, res_m: float | None = None) -> np.ndarray:
     """DEM в проекции сетки с шагом ``TER_RES_M`` и полем ``TER_PAD_PX`` пикселей.
 
     Форма: ``(prf * k + 2*pad, pic * k + 2*pad)``, где ``k = 500 / TER_RES_M``.
@@ -62,10 +67,11 @@ def projected_dem(meta: integro_grid.GridMeta) -> np.ndarray:
     """
     from cache_paths import ANABAR_DEM
 
-    k = int(round(meta.dx / config.TER_RES_M))
-    pad = config.TER_PAD_PX
+    res_m = res_m or config.TER_RES_M
+    k = int(round(meta.dx / res_m))
+    pad = pad_px(res_m)
     h, w = meta.prf * k + 2 * pad, meta.pic * k + 2 * pad
-    cache = ANABAR_DEM / f"dem_proj_{config.TER_RES_M:.0f}m_{h}x{w}.npy"
+    cache = ANABAR_DEM / f"dem_proj_{res_m:.0f}m_{h}x{w}.npy"
     if cache.exists():
         return np.load(cache)
 
@@ -82,8 +88,8 @@ def projected_dem(meta: integro_grid.GridMeta) -> np.ndarray:
     from pyproj import CRS, Transformer
 
     tr = Transformer.from_crs(CRS.from_proj4(proj4), CRS.from_epsg(4326), always_xy=True)
-    xs = [meta.x0 - pad * config.TER_RES_M, meta.x0 + (meta.pic * k + pad) * config.TER_RES_M]
-    ys = [meta.y_top + pad * config.TER_RES_M, meta.y_top - (meta.prf * k + pad) * config.TER_RES_M]
+    xs = [meta.x0 - pad * res_m, meta.x0 + (meta.pic * k + pad) * res_m]
+    ys = [meta.y_top + pad * res_m, meta.y_top - (meta.prf * k + pad) * res_m]
     corners = [(x, y) for x in xs for y in ys]
     lons, lats = zip(*[tr.transform(x, y) for x, y in corners])
     srcs = [rasterio.open(_tile_url(la, lo))
@@ -95,8 +101,8 @@ def projected_dem(meta: integro_grid.GridMeta) -> np.ndarray:
         s.close()
 
     dst = np.full((h, w), np.nan, dtype="float32")
-    dst_tf = Affine(config.TER_RES_M, 0.0, meta.x0 - pad * config.TER_RES_M,
-                    0.0, -config.TER_RES_M, meta.y_top + pad * config.TER_RES_M)
+    dst_tf = Affine(res_m, 0.0, meta.x0 - pad * res_m,
+                    0.0, -res_m, meta.y_top + pad * res_m)
     reproject(source=mosaic[0], destination=dst,
               src_transform=mosaic_tf, src_crs=src_crs,
               dst_transform=dst_tf, dst_crs=CRS.from_proj4(proj4),
@@ -136,8 +142,8 @@ def _block_stats(arr: np.ndarray, meta: integro_grid.GridMeta,
     return blocks.mean(axis=(1, 3)).ravel(), blocks.std(axis=(1, 3)).ravel()
 
 
-def terrain_features(meta: integro_grid.GridMeta,
-                     keep_dropped: bool = False) -> pd.DataFrame:
+def terrain_features(meta: integro_grid.GridMeta, keep_dropped: bool = False,
+                     res_m: float | None = None) -> pd.DataFrame:
     """Таблица признаков рельефа v2 на ячейки сетки (C-порядок, как датасет).
 
     Среднее по ячейке — для всех производных; дополнительно стандартное
@@ -147,9 +153,10 @@ def terrain_features(meta: integro_grid.GridMeta,
     ``keep_dropped=True`` возвращает и отбракованные ``TERRAIN_DROPPED`` — нужно
     только диагностике, которая эту отбраковку и обосновывает.
     """
-    k = int(round(meta.dx / config.TER_RES_M))
-    pad = config.TER_PAD_PX
-    deriv = terrain_derivatives(projected_dem(meta))
+    res_m = res_m or config.TER_RES_M
+    k = int(round(meta.dx / res_m))
+    pad = pad_px(res_m)
+    deriv = terrain_derivatives(projected_dem(meta, res_m), res_m)
     out = {}
     for name in ("elev", "slope", "curv", "tpi_500", "tpi_2km", "relief_1km", "incision"):
         mean, std = _block_stats(deriv[name], meta, k, pad)

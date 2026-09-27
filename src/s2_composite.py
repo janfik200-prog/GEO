@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import json
 import urllib.request
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -231,12 +232,20 @@ def median_composite(scenes: list[dict], meta: integro_grid.GridMeta,
     Попанальный проход держит в памяти одновременно только один канал по
     всем сценам, ценой повторного (но дешёвого — сцена уже закэширована на
     диск) чтения кэша на каждый канал.
+
+    Даже одного канала на широкой сетке хватает, чтобы упереться в память
+    (02.09.2026: ``MemoryError((420, 1515, 1495), dtype('bool'))``), поэтому
+    убраны две лишние копии стека: число валидных наблюдений набирается
+    инкрементально по мере чтения сцен (вместо ``np.isfinite(cube)`` целиком —
+    это ~1 ГБ булевого массива), а медиана считается ``overwrite_input=True``
+    (вместо внутренней копии стека — ещё ~4 ГБ). Стек после медианы уже не
+    нужен, портить его безопасно. Пик памяти на канал — размер самого стека.
     """
     res_m = res_m or config.S2_RES_M
     bands = list(config.S2_BANDS.values())
     comp, n_obs = {}, None
     for bi, b in enumerate(bands):
-        layers = []
+        cube, cnt, k = None, None, 0
         for i, sc in enumerate(scenes):
             try:
                 arr = scene_on_grid(sc, meta, res_m, only_bands=[b])
@@ -245,14 +254,30 @@ def median_composite(scenes: list[dict], meta: integro_grid.GridMeta,
                     print(f"  сцена {i + 1}/{len(scenes)}: {sc['id']} — ПРОПУЩЕНА ({exc!r})",
                           flush=True)
                 continue
-            layers.append(arr[b])
+            layer = arr[b]
+            if cube is None:
+                cube = np.empty((len(scenes),) + layer.shape, dtype=np.float32)
+            cube[k] = layer
+            k += 1
+            ok = np.isfinite(layer)
+            cnt = ok.astype(np.int32) if cnt is None else cnt + ok
+            del arr, layer, ok
             if progress and bi == 0:
                 progress(i + 1, len(scenes), sc)
-        cube = np.stack(layers)
-        del layers
-        with np.errstate(all="ignore"):
-            med = np.nanmedian(cube, axis=0)
-        cnt = np.isfinite(cube).sum(axis=0)
+        if cube is None:
+            raise RuntimeError(f"канал {b}: ни одной читаемой сцены из {len(scenes)}")
+        # Медиана полосами строк: при числе сцен <600 `np.nanmedian` внутри
+        # переходит на маскированный массив и аллоцирует булеву маску той же
+        # формы, что и стек, плюс копии при сортировке. На полосе это десятки
+        # МБ вместо гигабайта. `cube[:k, r0:r1]` — вид, поэтому
+        # `overwrite_input` работает на месте (стек дальше не нужен).
+        med = np.empty(cube.shape[1:], dtype=np.float32)
+        rows = max(1, int(256e6 // (k * cube.shape[2] * 4)))
+        for r0 in range(0, cube.shape[1], rows):
+            r1 = min(r0 + rows, cube.shape[1])
+            with np.errstate(all="ignore"), warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)  # пиксели без наблюдений
+                med[r0:r1] = np.nanmedian(cube[:k, r0:r1], axis=0, overwrite_input=True)
         del cube
         n_obs = cnt if n_obs is None else np.minimum(n_obs, cnt)
         comp[b] = med

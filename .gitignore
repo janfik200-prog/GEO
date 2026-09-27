@@ -28,3 +28,6 @@ datacache/
 # ОС
 desktop.ini
 .DS_Store
+
+# Черновики разовых замеров внутри experiments
+experiments/_scratch/

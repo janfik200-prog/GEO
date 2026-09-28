@@ -29,5 +29,13 @@ datacache/
 desktop.ini
 .DS_Store
 
+# Файлы-замки Office (появляются рядом с открытым документом)
+~$*
+
 # Черновики разовых замеров внутри experiments
 experiments/_scratch/
+
+# Claude Code: инструкции ассистенту, агенты, локальные настройки
+CLAUDE.md
+CLAUDE.local.md
+.claude/

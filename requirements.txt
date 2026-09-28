@@ -13,4 +13,10 @@ jupyter>=1.0
 pytest>=7.4
 ppigrf>=2.1
 python-pptx>=1.0
+# Отчёты заказчику в Word (experiments/md_to_docx.py): исходник ведётся в
+# Markdown рядом с кодом, .docx собирается из него.
+python-docx>=1.1
+# Каталоги STAC (src/stac_grid.py): поиск сцен и подпись ссылок Planetary Computer.
+pystac-client>=0.7
+planetary-computer>=1.0
 openpyxl>=3.1

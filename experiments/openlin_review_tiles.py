@@ -129,6 +129,10 @@ def main() -> None:
     ap.add_argument("--site", default="anabar")
     ap.add_argument("--набор", dest="set_name", default="весь",
                     choices=("весь", "зоны"))
+    ap.add_argument("--сцены", dest="scenes", default="12", choices=("12", "все"),
+                    help="набор на прежних 12 сценах или на всех 55 (своя папка)")
+    ap.add_argument("--цепочки", dest="chains", action="store_true",
+                    help="набор «цепочки» (мостики через кулисы убраны), своя папка")
     ap.add_argument("--только-контроль", dest="only_ctrl", action="store_true",
                     help="дорисовать контрольные окна, не трогая остальные")
     ap.add_argument("--контролей", dest="n_ctrl", type=int, default=N_CONTROL)
@@ -140,11 +144,15 @@ def main() -> None:
     from experiments.openlin_shade import _stretch
 
     t0 = time.time()
-    w = dict(np.load(COMP / f"winter_{a.site}_20m_лист.npz"))
+    sfx = "_все" if a.scenes == "все" else ""
+    out_dir = OUT_DIR.with_name(OUT_DIR.name + sfx)
+    w = dict(np.load(COMP / f"winter_{a.site}_20m_лист{sfx}.npz"))
     res_m = float(w["res_m"])
     img = w["shade"].astype("float32")
     valid = np.isfinite(img)
-    d = np.load(M / f"openlin_zone_lines_{a.site}_v3.npz")
+    if a.chains:
+        out_dir = OUT_DIR.with_name(OUT_DIR.name + "_цепочки")
+    d = np.load(M / f"openlin_zone_lines_{a.site}_v3{'_цеп' if a.chains else sfx}.npz")
     zone = d["zone"]
     # по умолчанию показывается ПОЛНЫЙ набор (отбор только по подтверждению
     # двумя съёмками); --набор зоны оставляет прежний, отфильтрованный зоной
@@ -157,8 +165,8 @@ def main() -> None:
     valid = valid[:shape[0], :shape[1]]
     base = _stretch(np.where(valid, img, np.nan))
     n_cell = int(WIN_KM * 1000 / res_m)
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    for old in OUT_DIR.glob("контроль_*.png" if a.only_ctrl else "*.png"):
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for old in out_dir.glob("контроль_*.png" if a.only_ctrl else "*.png"):
         old.unlink()
 
     wins = [] if a.only_ctrl else pick_windows(C, n_cell, MAX_WINDOWS, COVER_TARGET)
@@ -180,20 +188,20 @@ def main() -> None:
 
     for i, (r, c, n) in enumerate(wins, 1):
         km = n * res_m * res_m / 1e6
-        p = OUT_DIR / f"{i:02d}_окно_{r}_{c}.png"
+        p = out_dir / f"{i:02d}_окно_{r}_{c}.png"
         draw_pair(base, C, A, zone, (r, c), n_cell, res_m, p,
                   f"Окно {i} из {len(wins)} · {WIN_KM:.0f} × {WIN_KM:.0f} км · "
                   f"{place(r, c)} · север сверху")
         log(f"  {p.name}: ячеек линий {n} ({km:.2f} км2)")
     for i, (r, c, _n) in enumerate(ctrl, 1):
-        p = OUT_DIR / f"контроль_{i}_окно_{r}_{c}.png"
+        p = out_dir / f"контроль_{i}_окно_{r}_{c}.png"
         draw_pair(base, C, A, zone, (r, c), n_cell, res_m, p,
                   f"Контроль {i} · в зоне согласия, подтверждённых линий нет · "
                   f"{place(r, c)} · север сверху", control=True)
         log(f"  {p.name}")
     if a.only_ctrl:
         # обзор с рамками окон не перерисовывается: окон в этом режиме нет
-        log(f"\nготово: {OUT_DIR} ({time.time() - t0:.0f} с)")
+        log(f"\nготово: {out_dir} ({time.time() - t0:.0f} с)")
         return
 
     import matplotlib
@@ -222,8 +230,8 @@ def main() -> None:
                  f"синие рамки — окна с линиями, зелёные пунктирные — контроль",
                  loc="left", fontsize=14)
     fig.tight_layout()
-    fig.savefig(OUT_DIR / "00_обзор.png", dpi=100, facecolor=fig.get_facecolor())
-    log(f"\nготово: {OUT_DIR} ({time.time() - t0:.0f} с)")
+    fig.savefig(out_dir / "00_обзор.png", dpi=100, facecolor=fig.get_facecolor())
+    log(f"\nготово: {out_dir} ({time.time() - t0:.0f} с)")
 
 
 if __name__ == "__main__":

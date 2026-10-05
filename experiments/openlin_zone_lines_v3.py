@@ -265,9 +265,11 @@ SYM_N_TESTS = 6
 #: против всего счётчика на момент повтора.
 RED_N_TESTS_TOTAL = SYM_N_TESTS_PRIOR + SYM_N_TESTS          # 51
 NG_ALPHA = 0.05 / RED_N_TESTS_TOTAL                          # 0.00098
-#: Достижимость при 4000 сдвигах: пол 0.00025 против alpha/2 = 0.00049 —
-#: запас 1.96x, чуть ниже принятого двукратного. СЛЕДУЮЩИЙ прогон красного
-#: канала объявляет своё слагаемое и берёт не меньше 5000 сдвигов.
+#: Достижимость при 4000 сдвигах: пол 0.00025 <= alpha/2 = 0.00049 — правило
+#: ветки выполнено; запас alpha / пол = 3.9x. (28.09.2026 здесь ошибочно
+#: стояло «1.96x, ниже нормы»: запас был посчитан против alpha/2, то есть
+#: требовал пол <= alpha/4 — вдвое строже правила. Определение одно для всей
+#: ветки: запас = alpha / пол, требуется >= 2.)
 SHIFT_P_MAX = NG_ALPHA
 #: Второй канал поиска — NDVI (25.09.2026, объявлено до прогона).
 #: ПОВОД: линии ищутся на одном красном канале. ЗАМЕР (те же композит и
@@ -294,8 +296,64 @@ NDVI_N_TESTS_PRIOR = RED_N_TESTS_TOTAL                     # 51 (при прог
 NDVI_N_TESTS = 6
 NDVI_ALPHA = 0.05 / (NDVI_N_TESTS_PRIOR + NDVI_N_TESTS)   # 0.000877 (при прогоне 0.000926)
 #: Достижимость: 1/(n+1) <= NDVI_ALPHA/2 = 0.000439 даёт n >= 2279. Взято
-#: 5000: пол 0.0002, запас 2.2x (объявлялось 2.3x при недосчитанной цепочке).
+#: 5000: пол 0.0002, запас alpha / пол = 4.4x.
 NDVI_SHIFT_N = 5000
+#: Полный набор сцен (05.10.2026, объявлено до прогона). ПОВОД: три попытки
+#: ослабить подтверждение статистикой закрыты (голосование по сценам прямое и
+#: перекрёстное — openlin_vote, вторая ветка по полосам — openlin_bands), а
+#: слабое место подтверждения измерено: половины 8 против 4 сцен, на 77 %
+#: листа половина «Б» — одна сцена. Каталог при ТЕХ ЖЕ фильтрах даёт 55 годных
+#: сцен (10 / 9 / 17 / 19 по плиткам): прежний отбор останавливался на трёх.
+#: ЧТО МЕНЯЕТСЯ: только число сцен. Композит и половины собраны той же
+#: обработкой (openlin_all_scenes): половины 29 и 26 сцен, в каждой ячейке не
+#: меньше четырёх, одиночных нет. Тракт, пороги и правило подтверждения — те
+#: же, ни одно число не трогается. Канал — красный.
+#: УСЛОВИЯ ПРИЁМКИ — те же четыре, для двух наборов. Счётчик: после второй
+#: ветки (openlin_bands.BAND) 60, этот прогон добавляет 6.
+#: РЕЗУЛЬТАТ (05.10.2026): формально пройдено, глазом ОТКЛОНЕНО. В зонах 191
+#: линия / 345 км, все четыре условия (мусор 9.4 %, p = 0.0002, устойчивость
+#: 0.670, медиана 1.51 км); весь лист 1658 / 2430 км, мусор 2.9 %, длина 1.23
+#: км — не пройдена. Гипотеза «подтверждение спотыкается о неравные половины»
+#: НЕ подтвердилась: доля подтверждённых не выросла (50.5 % против 54.2 %),
+#: набор сменил состав на пятую часть (261 кусок новый, 327 пропали), но не
+#: вырос. Линеамент из «бусин» подтвердился, зато подтвердилась и ломаная на
+#: полосатой текстуре. Вердикт пользователя по парным окнам: «стало хуже».
+#: РАБОЧИМ ОСТАЁТСЯ НАБОР НА 12 СЦЕНАХ. Машинные условия этого ухудшения не
+#: увидели — ещё один довод, что глазная проверка обязательна.
+ALL_N_TESTS_PRIOR = 60
+ALL_N_TESTS = 6
+ALL_ALPHA = 0.05 / (ALL_N_TESTS_PRIOR + ALL_N_TESTS)      # 0.000758
+#: Сдвигов: n >= 2/alpha - 1 = 2639; берётся 4000, пол 0.00025, запас 3.0x.
+ALL_SHIFT_N = 4000
+#: «Цепочки»: мостики через кулисы не рисуются (05.10.2026, объявлено до прогона).
+#: ПОВОД — просмотр: «сшивка всё ещё работает криво». ЗАМЕР по рабочему набору
+#: (12 сцен): две трети подтверждённой длины — сшитые линии; у линий из трёх и
+#: более обрывков треть длины — мостики, то есть прямые отрезки, дорисованные
+#: через разрыв; сшитые линии в полтора раза кривее целых (3.0 % против 2.0 %).
+#: Дорисованного в подтверждённом наборе 424 км при 2358 км найденного.
+#: ОТВЕРГНУТЫЙ ВАРИАНТ — строгая сшивка (сдвиг вбок до 60 м): рисунок чище, но
+#: теряется 300 км настоящих кусков (13 %) — 184 км становятся короче 500 м,
+#: 115 км перестают подтверждаться; просмотр: «отсеялось нужное».
+#: ЧТО ДЕЛАЕТСЯ: обрывки объединяются в цепочку по ПРЕЖНИМ правилам сшивки,
+#: отбор по длине и подтверждение идут по цепочке, но ячейки мостиков со
+#: сдвигом вбок от V4_SIDE_MIN_M (60 м — допуск дрожания концов трассировки)
+#: убираются и с карты, и из расчёта подтверждения. Остаются найденные куски
+#: и мостики на прямом продолжении. Просмотр 14 окон: «выглядит неплохо».
+#: Замер просмотра: найденного 2344 км (было 2358), дорисованного 71 (было 424).
+#: Длина линии — длина цепочки от конца до конца, вместе с разрывами.
+#: Сцены — прежние 12, канал красный. УСЛОВИЯ — те же четыре, два набора.
+#: Счётчик: после полного набора сцен 66, этот прогон добавляет 6.
+#: РЕЗУЛЬТАТ (05.10.2026): ВСЕ ЧЕТЫРЕ УСЛОВИЯ ПРОЙДЕНЫ для набора в зонах —
+#: 182 линии / 344 км, мусор 7.1 %, p = 0.0002, устойчивость 0.642, медиана
+#: 1.65 км. Весь лист: 1724 линии / 2608 км, мусор 4.1 %, p = 0.0002, длина
+#: 1.27 км — не пройдена, как и прежде. С карты убрано 945 км мостиков через
+#: кулисы (по всем линиям, не только подтверждённым). Состав почти прежний:
+#: 98 % линий по листу повторяют набор с мостиками.
+CHAIN_N_TESTS_PRIOR = ALL_N_TESTS_PRIOR + ALL_N_TESTS     # 66
+CHAIN_N_TESTS = 6
+CHAIN_ALPHA = 0.05 / (CHAIN_N_TESTS_PRIOR + CHAIN_N_TESTS)   # 0.000694
+#: Сдвигов: n >= 2/alpha - 1 = 2879; берётся 4000, пол 0.00025, запас 2.8x.
+CHAIN_SHIFT_N = 4000
 # длина — условие этого прогона: правило сшивки изменено (см. V4_OFFSET_M)
 # ---------------------------------------------------------------------------
 
@@ -640,7 +698,7 @@ def link_same_side(lines, zone, strike, res_m, log=None, z=None) -> list:
         return x
 
     used = np.zeros(len(E), dtype=bool)
-    bridges, joined = {}, 0
+    bridges, kulisa, joined = {}, {}, 0
     for _d, p_, q_, sg in pairs:
         if used[p_] or used[q_]:
             continue
@@ -658,18 +716,25 @@ def link_same_side(lines, zone, strike, res_m, log=None, z=None) -> list:
         rr, cc = draw_line(int(E[p_][0]), int(E[p_][1]),
                            int(E[q_][0]), int(E[q_][1]))
         bridges.setdefault(own[p_], []).append(np.stack([rr, cc], 1))
-    groups = {}
+        if sg:          # сдвиг вбок не меньше V4_SIDE_MIN_M: мостик через кулису
+            kulisa.setdefault(own[p_], []).append(np.stack([rr[1:-1], cc[1:-1]], 1))
+    groups, gkul = {}, {}
     for i, r in enumerate(cand):
         groups.setdefault(find(i), []).append(r["pts"])
         groups[find(i)].extend(bridges.get(i, []))
+        gkul.setdefault(find(i), []).extend(kulisa.get(i, []))
     out = list(rest)
-    for g in groups.values():
+    for gid, g in groups.items():
         pts = np.unique(np.concatenate(g), axis=0)
         d = _describe(pts, res_m)
         if d is None:
             continue
         ax, _a, _b = _axis(pts)
         d["азимут"] = float(np.degrees(np.arctan2(ax[1], -ax[0])) % 180.0)
+        # ячейки мостиков через кулисы — дорисованные, не найденные: линия
+        # считается одной цепочкой, но рисовать и подтверждать их не обязательно
+        d["кулисы"] = (np.concatenate(gkul[gid]) if gkul.get(gid)
+                       else np.zeros((0, 2), dtype=int))
         out.append(d)
     if log is not None:
         log(f"  сшито стыков {joined}: обрывков от {LINK_MIN_LEN_M:.0f} м "
@@ -740,6 +805,10 @@ def select2(lines, zone, strike, dts, gate: bool = True) -> tuple[list, list]:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--site", default="anabar")
+    ap.add_argument("--сцены", dest="scenes", default="12", choices=("12", "все"),
+                    help="набор сцен: прежние 12 или все годные (55)")
+    ap.add_argument("--цепочки", dest="chains", action="store_true",
+                    help="не рисовать мостики через кулисы (см. CHAIN_* в шапке)")
     ap.add_argument("--канал", dest="channel", default="B04",
                     choices=("B04", "ndvi"),
                     help="канал поиска: B04 (тени) или ndvi (тоновые границы)")
@@ -755,7 +824,10 @@ def main() -> None:
     from experiments.openlin_kora import surrogate
 
     t0 = time.time()
-    w = dict(np.load(COMP / f"winter_{a.site}_20m_лист.npz"))
+    sfx = "_все" if a.scenes == "все" else ""
+    if sfx and a.channel != "B04":
+        raise SystemExit("полный набор сцен объявлен только для красного канала")
+    w = dict(np.load(COMP / f"winter_{a.site}_20m_лист{sfx}.npz"))
     res_m = float(w["res_m"])
     if a.channel == "ndvi":
         from experiments.openlin_winter import detrend
@@ -769,9 +841,24 @@ def main() -> None:
         p_max, n_sh = SHIFT_P_MAX, SHIFT_N
         n_total = RED_N_TESTS_TOTAL
         tag = ""
+    if a.chains:
+        if sfx or a.channel != "B04":
+            raise SystemExit("«цепочки» объявлены для 12 сцен и красного канала")
+        p_max, n_sh = CHAIN_ALPHA, CHAIN_SHIFT_N
+        n_total = CHAIN_N_TESTS_PRIOR + CHAIN_N_TESTS
+        tag = "_цеп"
+    if sfx:
+        p_max, n_sh = ALL_ALPHA, ALL_SHIFT_N
+        n_total = ALL_N_TESTS_PRIOR + ALL_N_TESTS
+        tag = sfx
     log(f"канал поиска: {a.channel}; порог значимости 0.05/{n_total} = "
         f"{p_max:.6f}, сдвигов {n_sh}")
-    halves = build_halves(a.site, log, a.channel)
+    if sfx:
+        halves = {n: np.load(COMP / f"winter_{a.site}_20m_лист{sfx}_{n}.npz")["shade"]
+                  for n in ("А", "Б")}
+        log("  половины — полный набор сцен (openlin_all_scenes)")
+    else:
+        halves = build_halves(a.site, log, a.channel)
     valid = np.isfinite(opt) & np.isfinite(halves["А"]) & np.isfinite(halves["Б"])
     k = int(round(100 / res_m))
     zone, strike = zone_and_strike(a.site, k)
@@ -809,7 +896,21 @@ def main() -> None:
             geom.append(pair_geometry(raw, zone, strike, res_m))
         L = link_same_side(raw, zone, strike, res_m, lg, z=zz)
         L = [x for x in L if x["длина_км"] * 1000 >= MIN_LEN_M]
-        return drop_seam_lines(L, seam, res_m, lg)
+        L = drop_seam_lines(L, seam, res_m, lg)
+        if a.chains:
+            W_ = valid.shape[1]
+            cut = 0
+            for x in L:
+                kul = x.get("кулисы")
+                if kul is not None and len(kul):
+                    keep = ~np.isin(x["pts"][:, 0] * W_ + x["pts"][:, 1],
+                                    kul[:, 0] * W_ + kul[:, 1])
+                    cut += int((~keep).sum())
+                    x["pts"] = x["pts"][keep]
+            if lg is not None:
+                lg(f"  цепочки: убрано ячеек мостиков через кулисы {cut} "
+                   f"({cut * res_m / 1000:.0f} км)")
+        return L
 
     def run(o, ho, hf, geom=None, lg=None):
         lo = optics(o, geom, lg)
@@ -953,7 +1054,7 @@ def main() -> None:
         log(f"  {name}: пар {len(g)}; разрыв вдоль, м (25/50/75/90 %): "
             + " / ".join(f"{v:.0f}" for v in q(0))
             + "; сдвиг вбок, м: " + " / ".join(f"{v:.0f}" for v in q(1)))
-    if a.channel != "B04":
+    if a.channel != "B04" or sfx or a.chains:
         # ДЛЯ СВЕДЕНИЯ: сколько подтверждённых линий повторяют красный канал
         ref_p = M / f"openlin_zone_lines_{a.site}_v3.npz"
         if ref_p.exists():

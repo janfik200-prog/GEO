@@ -131,8 +131,19 @@ def main() -> None:
                     choices=("весь", "зоны"))
     ap.add_argument("--сцены", dest="scenes", default="12", choices=("12", "все"),
                     help="набор на прежних 12 сценах или на всех 55 (своя папка)")
-    ap.add_argument("--цепочки", dest="chains", action="store_true",
-                    help="набор «цепочки» (мостики через кулисы убраны), своя папка")
+    ap.add_argument("--мостики", dest="bridges", action="store_true",
+                    help="прежний набор с мостиками через кулисы (по умолчанию — "
+                         "рабочий набор «цепочки»)")
+    ap.add_argument("--путь", dest="wide", action="store_true",
+                    help="набор с опорой мостика по самому широкому пути (своя папка)")
+    ap.add_argument("--близнецы", dest="twin", action="store_true",
+                    help="рабочий набор, он же по умолчанию (предел сдвига по близнецам)")
+    ap.add_argument("--чистка-1км", dest="clean1k", action="store_true",
+                    help="набор с чисткой и линиями от 1 км (своя папка)")
+    ap.add_argument("--чистка", dest="clean", action="store_true",
+                    help="набор с усреднением снимка вдоль линии (своя папка)")
+    ap.add_argument("--цепочки", dest="old_chains", action="store_true",
+                    help="прежний рабочий набор: «цепочки» со сдвигом до 600 м")
     ap.add_argument("--только-контроль", dest="only_ctrl", action="store_true",
                     help="дорисовать контрольные окна, не трогая остальные")
     ap.add_argument("--контролей", dest="n_ctrl", type=int, default=N_CONTROL)
@@ -150,9 +161,16 @@ def main() -> None:
     res_m = float(w["res_m"])
     img = w["shade"].astype("float32")
     valid = np.isfinite(img)
+    a.chains = not a.bridges and not sfx
+    a.twin = a.chains and not a.wide and not a.old_chains      # рабочий набор
     if a.chains:
         out_dir = OUT_DIR.with_name(OUT_DIR.name + "_цепочки")
-    d = np.load(M / f"openlin_zone_lines_{a.site}_v3{'_цеп' if a.chains else sfx}.npz")
+    alt = "_чист1" if a.clean1k else "_чист" if a.clean else "_путь" if a.wide else "_бл" if a.twin else ""
+    if alt:
+        out_dir = OUT_DIR.with_name(OUT_DIR.name + {"_чист1": "_чистка_1км", "_чист": "_чистка", "_путь": "_путь",
+                                                    "_бл": "_близнецы"}[alt])
+    d = np.load(M / f"openlin_zone_lines_{a.site}_v3"
+                    f"{alt or ('_цеп' if a.chains else sfx)}.npz")
     zone = d["zone"]
     # по умолчанию показывается ПОЛНЫЙ набор (отбор только по подтверждению
     # двумя съёмками); --набор зоны оставляет прежний, отфильтрованный зоной

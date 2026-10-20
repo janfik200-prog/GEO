@@ -84,7 +84,8 @@ def cover(a: np.ndarray, b: np.ndarray, res_m: float, tol: float) -> float:
 
 
 def trace(img: np.ndarray, valid: np.ndarray, res_m: float,
-          local: bool = False, min_len_m: float = MIN_LEN_M) -> list[dict]:
+          local: bool = False, min_len_m: float = MIN_LEN_M,
+          response_fn=None) -> list[dict]:
     """Линии замороженным генератором; к каждой — азимут.
 
     ``local`` — порог гистерезиса по окрестности (восьмая конфигурация
@@ -97,7 +98,7 @@ def trace(img: np.ndarray, valid: np.ndarray, res_m: float,
     from experiments.openlin_shadow import standardize
 
     x = np.where(valid, standardize(img, valid), 0.0).astype("float32")
-    raw = (axial_local_with_support(x, valid, res_m) if local
+    raw = (axial_local_with_support(x, valid, res_m, response_fn) if local
            else axial_with_strict_support(x, valid))
     _m, rows = to_lines_strict(raw, res_m)
     out = []

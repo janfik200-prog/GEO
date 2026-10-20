@@ -102,17 +102,24 @@ def psr_grayscale(meta, items, res_m: float | None = None, min_obs: int | None =
     return np.where(np.isfinite(db), db, np.nan), res_m, n_obs
 
 
-def edges_from_image(image: np.ndarray) -> np.ndarray:
-    """Карта краёв Кэнни прямо по композиту (без многоазимутного объединения)."""
+def edges_from_image(image: np.ndarray, low_pctl: float | None = None,
+                     high_pctl: float | None = None) -> np.ndarray:
+    """Карта краёв Кэнни прямо по композиту (без многоазимутного объединения).
+
+    Перцентили гистерезиса по умолчанию — ``config.LIN_EDGE_LOW_PCTL`` и
+    ``LIN_EDGE_PCTL``; переопределяются только в :mod:`src.line_accumulation`,
+    где нужны слабые фрагменты под сращивание (см. ``config.ACC_EDGE_*``).
+    """
     from skimage.feature import canny
 
+    low = config.LIN_EDGE_LOW_PCTL if low_pctl is None else low_pctl
+    high = config.LIN_EDGE_PCTL if high_pctl is None else high_pctl
     finite = np.isfinite(image)
     if finite.sum() < 100:
         return np.zeros(image.shape, dtype=bool)
     filled = np.where(finite, image, np.nanmedian(image[finite]))
     return canny(filled, sigma=config.LIN_CANNY_SIGMA,
-                low_threshold=config.LIN_EDGE_LOW_PCTL / 100.0,
-                high_threshold=config.LIN_EDGE_PCTL / 100.0,
+                low_threshold=low / 100.0, high_threshold=high / 100.0,
                 use_quantiles=True, mask=finite)
 
 

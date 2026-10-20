@@ -23,6 +23,8 @@ Landsat Collection 2, годовые мозаики ALOS PALSAR и архив AS
 """
 from __future__ import annotations
 
+import time
+
 import numpy as np
 import pandas as pd
 
@@ -32,13 +34,24 @@ _CATALOG = None
 
 
 def catalog():
-    """Клиент Planetary Computer с автоподписью ссылок (создаётся один раз)."""
+    """Клиент Planetary Computer с автоподписью ссылок (создаётся один раз).
+
+    Клиент собирается с ЯВНЫМ таймаутом (``config.SAT_STAC_TIMEOUT_S``). По
+    умолчанию ``pystac_client`` не ставит никакого, то есть запрос к каталогу
+    может висеть неограниченно — и тогда повторы в :func:`search` бесполезны,
+    потому что исключения, которое они ловят, не возникает (измерено 28.08.2026:
+    15 минут на поиске сцен одного окна, ноль байт, ноль ошибок).
+    """
     global _CATALOG
     if _CATALOG is None:
         import planetary_computer as pc
         from pystac_client import Client
+        from pystac_client.stac_api_io import StacApiIO
 
-        _CATALOG = Client.open(config.SAT_STAC_URL, modifier=pc.sign_inplace)
+        _CATALOG = Client.open(
+            config.SAT_STAC_URL, modifier=pc.sign_inplace,
+            stac_io=StacApiIO(timeout=(config.SAT_HTTP_CONNECT_TIMEOUT_S,
+                                       config.SAT_STAC_TIMEOUT_S)))
     return _CATALOG
 
 
@@ -77,13 +90,34 @@ def search(collection: str, meta: integro_grid.GridMeta,
     ``group_key`` — имя свойства STAC, по которому делятся группы (``sat:
     relative_orbit`` для Sentinel-1, ``landsat:wrs_path`` для Landsat). Если
     ``None``, квота применяется ко всей выборке.
+
+    Запрос к каталогу повторяется при ошибке — та же схема и те же константы, что
+    у :func:`read_on_grid`. ИЗМЕРЕНО 26.08.2026: сам поиск (а не чтение сцен)
+    отдал 504 Gateway Timeout и «request exceeded the maximum allowed time» на
+    трёх запросах подряд, и три сезонных окна прогона пропали целиком, хотя
+    данные были на месте. Повтор стоит паузы, отказ — всего окна.
     """
     y0 = min(years) if years else 1990
     y1 = max(years) if years else 2100
-    res = catalog().search(collections=[collection], bbox=bbox_wgs84(meta),
-                           datetime=f"{y0}-01-01T00:00:00Z/{y1}-12-31T23:59:59Z",
-                           query=query, max_items=max_items)
-    items = [i for i in res.items()
+    last: Exception | None = None
+    for attempt in range(config.SAT_FETCH_RETRIES):
+        try:
+            res = catalog().search(
+                collections=[collection], bbox=bbox_wgs84(meta),
+                datetime=f"{y0}-01-01T00:00:00Z/{y1}-12-31T23:59:59Z",
+                query=query, max_items=max_items)
+            # items() ленив: страницы тянутся здесь, поэтому и он внутри try.
+            raw = list(res.items())
+            break
+        except Exception as exc:                      # noqa: BLE001
+            last = exc
+            if attempt < config.SAT_FETCH_RETRIES - 1:
+                time.sleep(config.SAT_FETCH_BACKOFF_S * (2 ** attempt))
+    else:
+        raise RuntimeError(
+            f"поиск в каталоге {collection} не прошёл за "
+            f"{config.SAT_FETCH_RETRIES} попыток") from last
+    items = [i for i in raw
              if (years is None or i.datetime.year in years)
              and (months is None or i.datetime.month in months)]
     if max_per_group is None:
@@ -104,6 +138,30 @@ def grid_transform(meta: integro_grid.GridMeta, res_m: float):
 
     k = int(round(meta.dx / res_m))
     return Affine(res_m, 0.0, meta.x0, 0.0, -res_m, meta.y_top), meta.prf * k, meta.pic * k
+
+
+def gdal_env(env: dict | None = None) -> dict:
+    """Настройки GDAL на время чтения: таймауты по умолчанию плюс запрошенные.
+
+    Таймауты стоят ПЕРВЫМИ, а ``env`` вызывающего — вторым, то есть вызывающий
+    может их переопределить. Без таймаутов ``/vsicurl`` ждёт ответа бесконечно, и
+    повторы :func:`read_on_grid` не срабатывают: исключения, которое можно было
+    бы повторить, просто не возникает (измерено 26.08.2026, см.
+    ``config.SAT_HTTP_TIMEOUT_S``).
+
+    Абсолютного таймаута ОДНОГО НЕ ХВАТАЕТ, и это тоже измерено: ``/vsicurl``
+    тянет байтовые диапазоны несколькими параллельными соединениями, и на
+    застрявшей многопоточной подкачке он не срабатывает. Поэтому рядом стоит
+    порог СКОРОСТИ (``GDAL_HTTP_LOW_SPEED_*``): поток ниже
+    ``SAT_HTTP_LOW_SPEED_LIMIT`` байт/с дольше ``SAT_HTTP_LOW_SPEED_TIME_S``
+    секунд обрывается ошибкой. Именно он ловит случай «соединение есть, данных
+    нет», который абсолютный таймаут пропускал.
+    """
+    return {"GDAL_HTTP_TIMEOUT": str(config.SAT_HTTP_TIMEOUT_S),
+            "GDAL_HTTP_CONNECTTIMEOUT": str(config.SAT_HTTP_CONNECT_TIMEOUT_S),
+            "GDAL_HTTP_LOW_SPEED_LIMIT": str(config.SAT_HTTP_LOW_SPEED_LIMIT),
+            "GDAL_HTTP_LOW_SPEED_TIME": str(config.SAT_HTTP_LOW_SPEED_TIME_S),
+            **(env or {})}
 
 
 def href_on_grid(href: str, meta: integro_grid.GridMeta,
@@ -136,7 +194,7 @@ def href_on_grid(href: str, meta: integro_grid.GridMeta,
     last_exc: Exception | None = None
     for attempt in range(3):
         try:
-            with rasterio.Env(**(env or {})):
+            with rasterio.Env(**gdal_env(env)):
                 with rasterio.open(href) as src:
                     nd = src.nodata if nodata is None else nodata
                     with WarpedVRT(src, crs=CRS.from_proj4(proj4), transform=transform,
@@ -158,13 +216,27 @@ def read_on_grid(item, asset: str, meta: integro_grid.GridMeta,
 
     ``nearest`` обязателен для масок качества: усреднять номера классов нельзя,
     среднее между «облако» и «чисто» смысла не имеет.
+
+    Чтение повторяется при ошибке (:data:`config.SAT_FETCH_RETRIES`). Измерено
+    на многочасовых прогонах: часть сцен отдаёт 403 или обрывает соединение, и
+    та же сцена читается после паузы. Без повтора одна такая сцена роняет весь
+    прогон сенсора — то есть уже скачанное остаётся, а композит не собирается.
     """
     import planetary_computer as pc
 
-    # Подпись обновляется прямо перед чтением: у ссылок MPC короткий срок жизни,
-    # а прогон по сотне сцен идёт часами.
-    return href_on_grid(pc.sign(item.assets[asset].href), meta, res_m,
-                        band=band, nodata=nodata, nearest=nearest)
+    last: Exception | None = None
+    for attempt in range(config.SAT_FETCH_RETRIES):
+        try:
+            # Подпись обновляется прямо перед КАЖДОЙ попыткой: у ссылок MPC
+            # короткий срок жизни, а прогон по сотне сцен идёт часами, так что
+            # протухшая подпись — самая частая причина повтора.
+            return href_on_grid(pc.sign(item.assets[asset].href), meta, res_m,
+                                band=band, nodata=nodata, nearest=nearest)
+        except Exception as exc:                      # noqa: BLE001
+            last = exc
+            if attempt < config.SAT_FETCH_RETRIES - 1:
+                time.sleep(config.SAT_FETCH_BACKOFF_S * (2 ** attempt))
+    raise last
 
 
 def scene_on_grid(item, bands: dict[str, tuple[str, int]],

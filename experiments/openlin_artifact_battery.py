@@ -133,7 +133,8 @@ def main() -> None:
     w = dict(np.load(COMP / f"winter_{a.site}_20m_лист.npz"))
     res_m = float(w["res_m"])
     count = w["count"].astype("int16")
-    d = np.load(M / f"openlin_zone_lines_{a.site}_v3.npz")
+    from experiments.openlin_zone_lines_v3 import work_npz
+    d = np.load(work_npz(a.site))        # рабочий набор — «цепочки»
     A, C = d["A"], d["C"]
     shape = C.shape
     count = count[:shape[0], :shape[1]]

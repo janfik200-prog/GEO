@@ -74,13 +74,24 @@ def edge_map(elev: np.ndarray, azimuths=None, res_m: float | None = None) -> np.
     return acc
 
 
-def extract_lines(edges: np.ndarray) -> list[tuple[tuple[int, int], tuple[int, int]]]:
-    """Прямолинейные отрезки из карты краёв (вероятностное преобразование Хафа)."""
+def extract_lines(edges: np.ndarray, threshold: int | None = None,
+                  line_length: int | None = None, line_gap: int | None = None
+                  ) -> list[tuple[tuple[int, int], tuple[int, int]]]:
+    """Прямолинейные отрезки из карты краёв (вероятностное преобразование Хафа).
+
+    Параметры по умолчанию берутся из ``config.LIN_*`` — так их читают все
+    рабочие ветки. Переопределяются они ровно в одном месте
+    (:mod:`src.line_accumulation`), где отрезок нужен не как готовый линеамент, а
+    как ФРАГМЕНТ для последующего сращивания, и потому порог сознательно
+    ослабляется.
+    """
     from skimage.transform import probabilistic_hough_line
 
     return probabilistic_hough_line(
-        edges, threshold=config.LIN_HOUGH_THRESHOLD,
-        line_length=config.LIN_MIN_LEN_PX, line_gap=config.LIN_MAX_GAP_PX,
+        edges,
+        threshold=config.LIN_HOUGH_THRESHOLD if threshold is None else threshold,
+        line_length=config.LIN_MIN_LEN_PX if line_length is None else line_length,
+        line_gap=config.LIN_MAX_GAP_PX if line_gap is None else line_gap,
         rng=config.LIN_SEED)
 
 

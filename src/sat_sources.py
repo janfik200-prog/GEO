@@ -122,12 +122,18 @@ def fetch_s1(meta, log=None) -> tuple[pd.DataFrame, list]:
 
 
 # ---------------------------------------------------------------- Landsat 8/9
-def l8_mask(item, meta, res_m):
-    """Маска качества Landsat по битам ``qa_pixel`` (облако, тень, снег)."""
+def l8_mask(item, meta, res_m, reject_bits: tuple[int, ...] | None = None):
+    """Маска качества Landsat по битам ``qa_pixel`` (облако, тень, снег).
+
+    ``reject_bits`` по умолчанию ``config.L8_QA_REJECT_BITS``. Переопределяется в
+    одном месте — :mod:`src.seasonal_contrast`, где бит снега браковать нельзя:
+    ветка ищет снег и лёд, и штатная маска выбросила бы всё окно целиком.
+    """
+    bits = config.L8_QA_REJECT_BITS if reject_bits is None else reject_bits
     qa = stac_grid.read_on_grid(item, "qa_pixel", meta, res_m, nearest=True)
     bad = np.zeros(qa.shape, dtype=bool)
     q = np.nan_to_num(qa, nan=0.0).astype(np.uint32)
-    for bit in config.L8_QA_REJECT_BITS:
+    for bit in bits:
         bad |= (q >> bit) & 1 > 0
     return ~bad & np.isfinite(qa)
 

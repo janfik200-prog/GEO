@@ -61,6 +61,67 @@ PF_COLS: tuple[str, ...] = (
 )
 
 
+#: Трансформанты как ТРАССИРОВЩИКИ КРОМОК: имя кандидата -> (колонка, ориентация).
+#:
+#: Ориентация — не косметика, а условие корректности сверки. Протокол задачи №2
+#: берёт ВЕРХНИЕ ``FZ_AREA`` карты-кандидата, поэтому величина обязана расти к
+#: кромке источника. У аналитического сигнала и модуля горизонтального градиента
+#: так и есть (максимум над кромкой), а у tilt-derivative кромка — это НОЛЬ, и
+#: подача сырого tilt отвечала бы на другой вопрос («лежит ли разлом над телом»),
+#: а не на заявленный («лежит ли разлом на кромке тела»). Отсюда ``-|tilt|``.
+#: Первая вертикальная производная знакопеременна (знак задаётся контрастом
+#: плотности или намагниченности, а не геометрией), поэтому берётся модуль.
+EDGE_TRACERS: dict[str, tuple[str, str]] = {
+    "thdr_gr": ("gm_gr_1G_25", "raw"),      # модуль горизонтального градиента, гравика
+    "thdr_mag": ("gm_mag_1G_25", "raw"),    # то же, магнитка
+    "asig_gr": ("pf_gr_asig", "raw"),       # аналитический сигнал, гравика
+    "asig_mag": ("pf_mag_asig", "raw"),     # то же, магнитка
+    "tilt_gr": ("pf_gr_tdr", "neg_abs"),    # -|tilt|, кромка = ноль tilt
+    "tilt_mag": ("pf_mag_tdr", "neg_abs"),
+    "vz_gr": ("pf_gr_vz", "abs"),           # |первая вертикальная производная|
+    "vz_mag": ("pf_mag_vz", "abs"),
+}
+
+
+def orient_edge_score(values: np.ndarray, how: str) -> np.ndarray:
+    """Привести трансформанту к виду «больше = ближе к кромке источника».
+
+    Три правила (см. :data:`EDGE_TRACERS`): ``raw`` — величина уже максимальна
+    над кромкой; ``abs`` — знакопеременная, геометрию несёт модуль; ``neg_abs`` —
+    кромка это ноль величины, поэтому близость к кромке есть ``-|x|``.
+    """
+    v = np.asarray(values, dtype=float)
+    if how == "raw":
+        return v
+    if how == "abs":
+        return np.abs(v)
+    if how == "neg_abs":
+        return -np.abs(v)
+    raise ValueError(f"неизвестная ориентация {how!r}, "
+                     "допустимы 'raw', 'abs', 'neg_abs'")
+
+
+def edge_tracer_scores(df: pd.DataFrame,
+                       tracers: dict[str, tuple[str, str]] | None = None
+                       ) -> tuple[dict[str, np.ndarray], list[str]]:
+    """Карты-кандидаты :data:`EDGE_TRACERS` из таблицы -> ``(скоры, ненайденные)``.
+
+    Отсутствующие колонки не подставляются нулями и не выбрасывают исключение:
+    они возвращаются вторым списком, чтобы прогон честно напечатал, каких
+    кандидатов он не считал, и чтобы знаменатель Бонферрони остался прежним
+    (он фиксируется по ПОЛНОМУ списку, см. :data:`src.config.FZ_N_TESTS_PF`).
+    """
+    tracers = EDGE_TRACERS if tracers is None else tracers
+    scores: dict[str, np.ndarray] = {}
+    missing: list[str] = []
+    for name, (col, how) in tracers.items():
+        if col in df.columns:
+            scores[name] = orient_edge_score(df[col].to_numpy(dtype=float), how)
+        else:
+            missing.append(name)
+    return scores, missing
+
+
 def _taper2d(shape: tuple[int, int], frac: float) -> np.ndarray:
     """Окно Тьюки по обеим осям — гасит поле к краю массива перед БПФ."""
     from scipy.signal.windows import tukey

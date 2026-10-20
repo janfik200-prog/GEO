@@ -30,6 +30,7 @@ from experiments.openlin_zone_lines import COMP, M, OUT, mask_of, trace
 
 OUT_DIR = OUT.parent / "линеаменты_детектор"
 WIN_KM = 5.0
+OVERLAY_ALPHA = 0.6          # непрозрачность наложений: снимок под разметкой остаётся виден
 #: контрольные окна 1-4 текущего набора, прежние контрольные 1 и 6 (там геолог
 #: нашёл пропущенные линеаменты) и два обычных окна для сравнения
 DEFAULT_WINDOWS = ((1176, 733), (2977, 206), (1684, 526), (2069, 988),
@@ -65,8 +66,19 @@ def whole_sheet(img, valid, z, R, A, C) -> None:
         "3_все_вытянутые_линии": paint([(R, (0.15, 0.75, 0.95))], 3),
         "4_итог": paint([(A & ~C, (0.95, 0.60, 0.0)), (C, (0.85, 0.05, 0.05))], 3),
     }
+    # наложения: детектор полупрозрачно поверх снимка, чтобы под разметкой был
+    # виден сам объект. Отклик — прозрачность растёт с силой (слабый не красит
+    # снимок вовсе), линии — ровные полупрозрачные
+    al = (OVERLAY_ALPHA * np.clip(np.where(valid, z, 0.0), 0, zmax) / zmax)[..., None]
+    stages["наложение_отклик"] = gray * (1 - al) + resp * al
+    lm = binary_dilation(R, np.ones((3, 3), bool))[..., None] * OVERLAY_ALPHA
+    stages["наложение_линии"] = gray * (1 - lm) + np.array((0.15, 0.75, 0.95)) * lm
     for name, arr in stages.items():
-        plt.imsave(OUT_DIR / f"весь_лист_{name}.png", np.clip(arr, 0, 1))
+        try:
+            plt.imsave(OUT_DIR / f"весь_лист_{name}.png", np.clip(arr, 0, 1))
+        except OSError as exc:          # файл открыт в просмотрщике — не перезаписать
+            print(f"  весь_лист_{name}.png: НЕ записан ({exc.strerror})", flush=True)
+            continue
         print(f"  весь_лист_{name}.png", flush=True)
 
     # обзор: линии утолщены сильнее, иначе при уменьшении листа они исчезают
@@ -112,7 +124,8 @@ def main() -> None:
     res_m = float(w["res_m"])
     img = w["shade"].astype("float32")
     valid = np.isfinite(img)
-    d = np.load(M / f"openlin_zone_lines_{a.site}_v3.npz")
+    from experiments.openlin_zone_lines_v3 import work_npz
+    d = np.load(work_npz(a.site))        # рабочий набор — «цепочки»
     A, C = d["A_all"], d["C_all"]
     shape = C.shape
     img, valid = img[:shape[0], :shape[1]], valid[:shape[0], :shape[1]]

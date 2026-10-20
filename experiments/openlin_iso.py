@@ -550,14 +550,48 @@ def local_norm(r: np.ndarray, valid: np.ndarray, res_m: float,
     return np.where(valid, z, floor).astype("float32")
 
 
+def oriented_response(img: np.ndarray, along: float, sigmas: tuple = SIGMAS,
+                      workers: int = 2) -> np.ndarray:
+    """Кривизна поперёк линии после усреднения ВДОЛЬ неё, максимум по углам.
+
+    «Чистка снимка вдоль линии»: шум вдоль линии независим, а линия тянется,
+    поэтому усреднение вытянутым окном (поперёк — прежние ``sigmas``, вдоль —
+    ``along`` ячеек) гасит шум и оставляет линию. Направление заранее
+    неизвестно: окно поворачивается с шагом, равным его угловой ширине, и
+    берётся наибольший отклик. Считается в частотной области — гауссово окно и
+    вторая производная поперёк дают множитель, зависящий только от угла.
+    Замер и выбор длины окна — :mod:`openlin_clean_probe`.
+    """
+    from scipy import fft
+
+    H, W = img.shape
+    F = fft.rfft2(img, workers=workers)
+    fy = fft.fftfreq(H)[:, None].astype("float32")
+    fx = fft.rfftfreq(W)[None, :].astype("float32")
+    best = np.zeros((H, W), dtype="float32")
+    for s in sigmas:
+        la = max(float(along), s)
+        n_th = int(np.ceil(np.pi * la / s))
+        for k in range(n_th):
+            th = np.pi * k / n_th
+            fa = fy * np.cos(th) + fx * np.sin(th)        # частота вдоль линии
+            fn = -fy * np.sin(th) + fx * np.cos(th)       # частота поперёк
+            h = (2 * np.pi * fn) ** 2 * np.exp(-2 * np.pi ** 2 * (la ** 2 * fa ** 2
+                                                                  + s ** 2 * fn ** 2))
+            r = fft.irfft2(F * h, s=(H, W), workers=workers)
+            np.maximum(best, (s ** 2) * np.abs(r).astype("float32"), out=best)
+    return best
+
+
 def axial_local_with_support(img: np.ndarray, valid: np.ndarray,
-                             res_m: float = 10.0) -> tuple:
+                             res_m: float = 10.0, response_fn=None) -> tuple:
     """Осевая линия и опора для сшивки — по отклику, нормированному локально.
 
     Всё остальное как у «сшивки по порогу»: те же квантили гистерезиса и тот
     же порог опоры, только считаются они по нормированному отклику.
+    ``response_fn`` подменяет сам отклик (по умолчанию — ``ridge_response``).
     """
-    r = np.where(valid, ridge_response(img), 0.0)
+    r = np.where(valid, (response_fn or ridge_response)(img), 0.0)
     z = local_norm(r, valid, res_m)
     v = z[valid]
     hi, lo = np.quantile(v, Q_HIGH), np.quantile(v, Q_LOW)

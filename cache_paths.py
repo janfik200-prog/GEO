@@ -29,8 +29,12 @@ PSR_ANABAR = CACHE / "psr_anabar"        # ALOS PALSAR-2 годовые моза
 AST_ANABAR = CACHE / "ast_anabar"        # ASTER L1T (архив до 04.2008)
 ASTIR_ANABAR = CACHE / "astir_anabar"    # ASTER TIR каналы 10-14 (LP DAAC, весь архив)
 GGK200 = CACHE / "ggk200"                # листы Госгеолкарты-200 (растры geokniga)
+# Шаг 0 «чистка стекла»: серые композиты, уже сведённые из кэшей сенсоров выше.
+# Не скачанное, а ПОСЧИТАННОЕ — но сборка композита Sentinel-2 из 180 сцен идёт
+# минутами даже с диска, а свип предела обнаружения перезапускается часто.
+DETECTION_LIMIT = CACHE / "detection_limit"
 
 for _p in (NURE, MRDS_CSV.parent, WORLD_GEO, ANABAR_GEO, ANABAR_DEM, CMMI, CMMI_AU,
            S2_ANABAR, S1_ANABAR, L8_ANABAR, PSR_ANABAR, AST_ANABAR, ASTIR_ANABAR,
-           GGK200):
+           GGK200, DETECTION_LIMIT):
     _p.mkdir(parents=True, exist_ok=True)

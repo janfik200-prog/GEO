@@ -77,6 +77,21 @@ def convert(md_path: Path, docx_path: Path | None = None) -> Path:
         line = lines[i]
         stripped = line.strip()
 
+        # блок команд между ``` — моноширинным, разметка внутри не разбирается
+        if stripped.startswith("```"):
+            i += 1
+            while i < len(lines) and not lines[i].strip().startswith("```"):
+                par = doc.add_paragraph()
+                par.paragraph_format.left_indent = Inches(0.2)
+                par.paragraph_format.space_after = Pt(0)
+                run = par.add_run(lines[i])
+                run.font.name = "Consolas"
+                run.font.size = Pt(9)
+                i += 1
+            i += 1                      # закрывающая ``` — не содержимое
+            doc.add_paragraph()
+            continue
+
         # таблица: копим строки, пока идут |...|
         if stripped.startswith("|"):
             pending: list[list[str]] = []
@@ -122,7 +137,7 @@ def convert(md_path: Path, docx_path: Path | None = None) -> Path:
             # абзац может быть перенесён по строкам — склеиваем до пустой
             buf = [stripped]
             while (i + 1 < len(lines) and lines[i + 1].strip()
-                   and not lines[i + 1].strip().startswith(("#", "|", "-", "*", "!["))):
+                   and not lines[i + 1].strip().startswith(("#", "|", "-", "*", "![", "```"))):
                 i += 1
                 buf.append(lines[i].strip())
             _add_runs(doc.add_paragraph(), " ".join(buf))

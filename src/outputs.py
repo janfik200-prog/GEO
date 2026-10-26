@@ -70,6 +70,7 @@ RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("09_минерагения", ("honest_mineragenic", "mineragenic_", "org_")),
     ("10_методы_из_литературы", ("lit6b_", "gm_gr_")),
     ("11_презентации", ("project_story", "deck_", "roadmap_")),
+    ("13_генетическая_модель", ("gmo_",)),
 )
 
 OTHER = "прочее"

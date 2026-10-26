@@ -200,11 +200,22 @@ def granule_on_grid(gr: Granule, meta: integro_grid.GridMeta, cache_dir,
     поверхность.
     """
     res_m = res_m or config.SAT_RES_M
-    cache = Path(cache_dir) / f"{gr.id}_{res_m:.0f}m.npz"
+    # Форма сетки в имени и сверка формы — как в ``stac_grid.scene_on_grid``:
+    # одна гранула нужна и листу, и широкой сетке, без этого массив чужой
+    # сетки тихо подставлялся вместо своего.
+    k = int(round(meta.dx / res_m))
+    expected_shape = (meta.prf * k, meta.pic * k)
+    cache = Path(cache_dir) / f"{gr.id}_{res_m:.0f}m_{meta.prf}x{meta.pic}.npz"
+    legacy = Path(cache_dir) / f"{gr.id}_{res_m:.0f}m.npz"
     have: dict[str, np.ndarray] = {}
-    if cache.exists():
-        with np.load(cache) as z:
-            have = {k: z[k] for k in z.files}
+    for path in (cache, legacy):
+        if not path.exists():
+            continue
+        with np.load(path) as z:
+            cand = {b: z[b] for b in z.files}
+        if cand and next(iter(cand.values())).shape == expected_shape:
+            have = cand
+            break
     need = [b for b in BANDS if b not in have]
     if need:
         env = edl_env()
@@ -304,11 +315,23 @@ def fetch(meta: integro_grid.GridMeta, log=None) -> tuple[pd.DataFrame, list[Gra
         log(f"ASTER TIR: {len(grans)} гранул, годы {yrs}, "
             f"облачность {min(g.cloud for g in grans):.0f}-"
             f"{max(g.cloud for g in grans):.0f}%")
-    scenes = []
     for i, g in enumerate(grans):
-        scenes.append(scene_layers(granule_on_grid(g, meta, ASTIR_ANABAR)))
+        h = granule_on_grid(g, meta, ASTIR_ANABAR)["b13"].shape[0]
         if log:
             log(f"  гранула {i + 1}/{len(grans)}: {g.id} "
                 f"({g.datetime.date()}, облачность {g.cloud:.0f}%)")
-    comp, n_obs = stac_grid.median_stack(scenes, min_obs=config.ASTIR_MIN_OBS)
+    # Медиана полосами строк: на широкой сетке 228 сцен x 9 слоёв целиком не
+    # помещаются в память (~37 ГБ). Расчёт попиксельный, результат тот же.
+    step = max(1, h // 16)
+    parts, n_parts = [], []
+    for r0 in range(0, h, step):
+        scenes = []
+        for g in grans:
+            dn = granule_on_grid(g, meta, ASTIR_ANABAR)
+            scenes.append(scene_layers({b: a[r0:r0 + step] for b, a in dn.items()}))
+        comp, n_obs = stac_grid.median_stack(scenes, min_obs=config.ASTIR_MIN_OBS)
+        parts.append(comp)
+        n_parts.append(n_obs)
+    comp = {b: np.concatenate([p[b] for p in parts]) for b in parts[0]}
+    n_obs = np.concatenate(n_parts)
     return stac_grid.to_cells(comp, meta, n_obs=n_obs, prefix="astir_"), grans

@@ -20,6 +20,10 @@ I.4 (верхние 10% по обнажённым ячейкам) — канди
 Запуск::
 
     python -m experiments.gmo_v2_ggk200
+
+С ключом ``--deck`` рисуется только основной лист в размер места на слайде
+(`deck_map`, кегль подписей 10–10,5 пт на экране) в
+`outputs/13_генетическая_модель/для_колоды/`; без ключа поведение прежнее.
 """
 from __future__ import annotations
 
@@ -131,5 +135,88 @@ def main():
     print(f"Карта: {out}")
 
 
+# Размер рисунка для колоды — ровно его место на слайде в дюймах, тогда кегль
+# в рисунке равен кеглю на экране. Колода БД-БЗ-ГМО, слайд «Модель ложится на
+# карты»: картинка 9.4 x 4.95" слева от текста.
+DECK_SIZE = (9.4, 4.95)
+DECK_FONT = 10.5
+
+
+def deck_dir() -> Path:
+    """Папка версий карт для колоды; исходные PNG не трогаются."""
+    d = outputs.png("gmo_v2_ggk200.png").parent / "для_колоды"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def deck_map(size=DECK_SIZE, font=DECK_FONT):
+    """Только основной лист, крупно: легенда и врезка щита — справа от карты.
+
+    Те же слои, что на правой панели `main()`; кегль подписей `font` — в
+    пунктах на слайде, потому что рисунок размером с место на слайде.
+    """
+    with plt.rc_context({"font.size": font, "axes.labelsize": font,
+                         "xtick.labelsize": font - 1, "ytick.labelsize": font - 1}):
+        fig = plt.figure(figsize=size, constrained_layout=True)
+        gs = fig.add_gridspec(2, 2, width_ratios=[1.0, 0.82],
+                              height_ratios=[0.9, 1.1])
+        axm = fig.add_subplot(gs[:, 0])
+        axi = fig.add_subplot(gs[0, 1])
+        axl = fig.add_subplot(gs[1, 1])
+        axl.axis("off")
+
+        ggk200_base.draw(axm, bounds=MAIN, decimate=2, alpha=0.75)
+        layer("glub_raz_nw").plot(ax=axm, facecolor="none", edgecolor=CAUTION,
+                                  hatch="//", linewidth=1.2, alpha=0.8)
+        layer("glub_r_nw").boundary.plot(ax=axm, color=CAUTION, linewidth=1.2,
+                                         linestyle=":")
+        layer("kory").plot(ax=axm, color="#7d3c98", linewidth=2.0)
+        layer("gr_dol_vp_poly").boundary.plot(ax=axm, color="#1f618d",
+                                              linewidth=1.4, linestyle="-.")
+        mgoh_anomaly().plot(ax=axm, facecolor="#1e8449", edgecolor="none",
+                            alpha=0.75)
+        halos = layer("геохимические ореолы")
+        halos[halos.label == "Au"].plot(ax=axm, color="gold", linewidth=3.2)
+        axm.set_xlim(MAIN[0], MAIN[2])
+        axm.set_ylim(MAIN[1], MAIN[3])
+        axm.set_xlabel("долгота, ° в.д.")
+        axm.set_ylabel("широта, ° с.ш.")
+
+        anabar_inset.draw(axi, fontsize=font, title=False, legend=False)
+        axi.set_title("Положение листа на щите", fontsize=font)
+        # при крупном кегле подписи врезки сдвинуты: имя листа — над
+        # Попигаем, ссылка на источник — под легендой (иначе наползают)
+        for t in list(axi.texts):
+            if t.get_text().startswith("по Harrison"):
+                t.remove()
+        for a in axi.texts:
+            if a.get_text() == "R-48-XI,XII":
+                a.set_position((104.4, 72.75))
+        fig.text(0.99, 0.01, "контур щита — по Harrison и др., 2011 (1:5 млн)",
+                 ha="right", va="bottom", fontsize=font - 1.5, color="0.35")
+
+        leg = axl.legend(handles=[
+            Patch(facecolor="#1e8449", alpha=0.75,
+                  label="I.4 диафторез: Mg-OH 2.33 мкм,\nверхние 10% обнажённых ячеек"),
+            Line2D([0], [0], color="gold", lw=3.2, label="ореолы Au — только заверка"),
+            Patch(facecolor="none", edgecolor=CAUTION, hatch="//",
+                  label="I.3 разломные зоны СЗ ⚠"),
+            Line2D([0], [0], color=CAUTION, lw=1.2, ls=":",
+                   label="I.3 разломные зоны СВ ⚠"),
+            Line2D([0], [0], color="#7d3c98", lw=2, label="II.6 коры выветривания ⚠"),
+            Line2D([0], [0], color="#1f618d", lw=1.4, ls="-.",
+                   label="III.8 палеодолины ⚠"),
+        ], loc="upper left", fontsize=font, frameon=False, borderaxespad=0,
+            title="⚠ слой формулы — с осторожностью", title_fontsize=font)
+        leg._legend_box.align = "left"
+        out = deck_dir() / "gmo_v2_ggk200_list.png"
+        mapstyle.save_fig(fig, out, dpi=220)
+        plt.close(fig)
+    print(f"Карта для колоды: {out}")
+
+
 if __name__ == "__main__":
-    main()
+    if "--deck" in sys.argv:
+        deck_map()
+    else:
+        main()

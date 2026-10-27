@@ -28,6 +28,10 @@ Sentinel-2) — только на обнажённых ячейках. Уран 
 Запуск::
 
     python -m experiments.gmo_v2_wide
+
+С ключом ``--deck`` строится только рисунок для колоды (`deck_figure`: карты
+03 и 15 рядом, одна врезка щита, кегль 10–10,5 пт на экране) в
+`outputs/13_генетическая_модель/для_колоды/`; без ключа поведение прежнее.
 """
 from __future__ import annotations
 
@@ -245,6 +249,112 @@ def formula_map(ctx: Context, fname, title, roles: dict):
     plt.close(fig)
 
 
+# Версия для колоды БД-БЗ-ГМО (слайд «Разломы на карте»): две карты I.3 рядом,
+# одна врезка щита и общая легенда слева. Рисунок размером с место на слайде
+# (дюймы), поэтому кегль в нём равен кеглю на экране.
+DECK_SIZE = (12.2, 5.3)
+DECK_FONT = 10.5
+
+
+def _deck_frame(ax, ctx: Context):
+    """Рамки и заверка без легенды и врезки — как в `decorate`."""
+    ctx.shield.boundary.plot(ax=ax, color="black", linewidth=1.3, linestyle="--",
+                             zorder=6)
+    ax.plot(*ctx.wide_ring.T, color="#17a589", linewidth=1.6, zorder=6)
+    gpd.GeoSeries([ctx.main]).boundary.plot(ax=ax, color="red", linewidth=1.8,
+                                            zorder=6)
+    ctx.halos.plot(ax=ax, color="gold", linewidth=2.6, zorder=7)
+    ax.scatter(ctx.shlikh["долгота"], ctx.shlikh["широта"], marker="*", s=90,
+               color="gold", edgecolor="black", linewidth=0.6, zorder=8)
+    ax.set_xlim(BOUNDS[0], BOUNDS[2])
+    ax.set_ylim(BOUNDS[1], BOUNDS[3])
+    ax.set_xlabel("долгота, ° в.д.")
+    ax.set_ylabel("широта, ° с.ш.")
+
+
+def deck_figure(size=DECK_SIZE, font=DECK_FONT):
+    """Плотность линеаментов (канал 03) и разломные зоны формулы (слой 15)
+    одним рисунком в `outputs/13_генетическая_модель/для_колоды/`."""
+    ctx = Context()
+    with plt.rc_context({"font.size": font, "axes.labelsize": font,
+                         "xtick.labelsize": font - 1, "ytick.labelsize": font - 1,
+                         "axes.titlesize": font + 0.5}):
+        fig = plt.figure(figsize=size, constrained_layout=True)
+        gs = fig.add_gridspec(2, 3, width_ratios=[0.5, 1.13, 1.0],
+                              height_ratios=[0.8, 1.2])
+        axi = fig.add_subplot(gs[0, 0])
+        axl = fig.add_subplot(gs[1, 0])
+        axl.axis("off")
+        ax1 = fig.add_subplot(gs[:, 1])
+        ax2 = fig.add_subplot(gs[:, 2])
+
+        # левая карта: плотность линеаментов, как channel_map("03_I3_lineamenty")
+        w = ctx.wide
+        v = w["lin_dens"].to_numpy(dtype=float)
+        cover = np.isfinite(v).mean()
+        lon, lat, img = regular_mesh(w.x.to_numpy(), w.y.to_numpy(), v)
+        ggk200_base.draw(ax1, bounds=BOUNDS, decimate=6, alpha=0.55)
+        lo, hi = np.nanpercentile(img, [2, 98])
+        m = ax1.pcolormesh(lon, lat, np.ma.masked_invalid(img), cmap="magma",
+                           vmin=lo, vmax=hi, alpha=0.8, shading="flat", zorder=2,
+                           rasterized=True)
+        cb = fig.colorbar(m, ax=ax1, shrink=0.8, pad=0.01)
+        cb.set_label("плотность линеаментов, км/км²")
+        _deck_frame(ax1, ctx)
+        ax1.set_title(f"I.3 по рельефу: плотность линеаментов lin_dens\n"
+                      f"значения на {cover:.0%} широкой сетки")
+
+        # правая карта: зоны СЗ и СВ, как formula_map("15_I3_formula_razlomy")
+        ggk200_base.draw(ax2, bounds=BOUNDS, decimate=6, alpha=0.55)
+        roles = next(r for f, _, r in FORMULA if f == "15_I3_formula_razlomy")
+        extra = []
+        for role, label in roles.items():
+            zone = ctx.formula[role] == 0
+            color, hatch = FORMULA_STYLE[role]
+            zone_polygon(ctx.fx[zone], ctx.fy[zone]).plot(
+                ax=ax2, facecolor=color, edgecolor=color, hatch=hatch, alpha=0.35,
+                linewidth=0.8, zorder=3)
+            extra.append(Patch(facecolor=color, alpha=0.35, edgecolor=color,
+                               hatch=hatch, label=f"{label} ⚠"))
+        ax2.plot(*ctx.formula_ring.T, color=CAUTION, linewidth=1.3, linestyle=":",
+                 zorder=6)
+        extra.append(Line2D([0], [0], color=CAUTION, lw=1.3, ls=":",
+                            label="где слои формулы есть\n(105–108° в.д.)"))
+        _deck_frame(ax2, ctx)
+        ax2.set_title("I.3 слои формулы ⚠: зоны СЗ и СВ\n"
+                      "только полоса 105–108° в.д.")
+        for ax in (ax1, ax2):
+            ax.set_xticks(np.arange(104, 108.5, 1.0))
+
+        anabar_inset.draw(axi, fontsize=font, title=False, legend=False)
+        for t in list(axi.texts):
+            if t.get_text().startswith("по Harrison"):
+                t.remove()
+        for a in axi.texts:
+            if a.get_text() == "R-48-XI,XII":
+                a.set_position((104.4, 72.75))
+        axi.set_title("Положение листа на щите")
+
+        leg = axl.legend(handles=extra + [
+            Line2D([0], [0], color="black", lw=1.3, ls="--",
+                   label="граница щита (1:5 млн,\nпо Harrison и др., 2011)"),
+            Line2D([0], [0], color="#17a589", lw=1.6, label="широкая сетка (5 листов)"),
+            Line2D([0], [0], color="red", lw=1.8, label="основной лист R-48-XI,XII"),
+            Line2D([0], [0], color="gold", lw=2.6, label="ореолы Au — заверка"),
+            Line2D([0], [0], marker="*", ls="", color="gold", markeredgecolor="black",
+                   ms=10, label="шлихи с Au — заверка"),
+        ], loc="upper left", fontsize=font - 0.5, frameon=False, borderaxespad=0,
+            handlelength=1.6, title="⚠ слой формулы —\nс осторожностью",
+            title_fontsize=font - 0.5)
+        leg._legend_box.align = "left"
+        d = outputs.png("gmo_wide_x.png").parent / "для_колоды"
+        d.mkdir(parents=True, exist_ok=True)
+        out = d / "gmo_wide_I3_razlomy_dve_karty.png"
+        mapstyle.save_fig(fig, out, dpi=220)
+        plt.close(fig)
+    print(f"карта для колоды: {out}; lin_dens покрытие {cover:.0%}")
+
+
 def main():
     ctx = Context()
     print(f"обнажено (s2_bare_frac ≥ {spectral_mask.BARE_MIN}): {ctx.bare.mean():.0%} широкой сетки")
@@ -258,4 +368,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if "--deck" in sys.argv:
+        deck_figure()
+    else:
+        main()

@@ -1,0 +1,16 @@
+module,status,evidence_path,command,exit_code,blocker,reviewer
+WP00_BASELINE,VERIFIED,RELEASE_MANIFEST.json; 07_repro_package/MANIFEST_SHA256.csv,python -m experiments.ipuz_release --freeze <каталог>,0,,автор
+WP01_S2_TEST_FIX,VERIFIED,03_runs/stdout_pytest_full.log,python -m pytest -q -rs,0,,автор
+WP02_PORTABILITY,VERIFIED,qa/portability_check.json; qa/portable_run.log,python 05_maps/make_maps.py; python 06_article/build_article.py,0,,автор
+WP03_RASTERS,VERIFIED,05_maps/raster_geometry_check.json,python -m experiments.ipuz_rasters --freeze <каталог>,0,,автор
+WP04_SPATIAL_SPLIT,VERIFIED,02_protocol/fold_geometry_audit.json; 02_protocol/fold_geometry_audit.csv,python -m experiments.ipuz_fold_audit --freeze <каталог>,0,,автор
+WP05_METRICS,VERIFIED,04_metrics/main_metrics.csv; 04_metrics/ceiling_metrics.csv; 05_maps/raster_geometry_check.json,python -m experiments.operating_point_masked,0,,автор
+WP06_ABLATIONS,VERIFIED,04_metrics/spectral_ablation.csv,python -m experiments.spectral_exposure_control,0,порог 2 % подобран на тех же полосах — оптимизм отбора не устранён,автор
+WP07_UNCERTAINTY,VERIFIED,04_metrics/o10_block_ci_reproduced.csv; o10_block_ci_draws.csv; o10_block_ci_meta.json,python -m experiments.ipuz_block_ci --freeze <каталог>,0,,автор
+WP08_MAPS,VERIFIED,05_maps/map_pair.png; map_overlap.png; map_detail.png; map_sources.json,python 05_maps/make_maps.py,0,публикация требует разрешения правообладателя (WP12),автор
+WP09_ENVIRONMENT,VERIFIED,07_repro_package/env/env_lock.json; requirements_exact.txt; docs/README_REPRODUCE.md,python -m venv; pip install -r requirements_exact.txt,0,,автор
+WP10_REFERENCES,VERIFIED,docs/REFERENCES_CHECK.md,сверка DOI по api.crossref.org,0,шаблон сборника с сайта не скачивался,автор
+WP11_DB,REPORT_ONLY,docs/DB_STATUS.md,чтение живой базы на 5433 без записи,0,не является проверкой геологической истинности; в числа статьи не входит,автор
+WP12_RIGHTS,BLOCKED,docs/LIMITATIONS.md п. 11,,,письменное разрешение организации на публикацию производных карт,владелец
+WP13_ARTICLE,VERIFIED,06_article/ARTICLE_FINAL.docx (8 страниц),python 06_article/build_article.py,0,авторский блок — шаблон; закрывается ключом --authors,автор
+WP14_EXTERNAL_FUTURE,NOT_EVALUATED,docs/NEXT_STUDY_TZ.md,,,нет внешней территории с независимыми метками,владелец

@@ -18,8 +18,11 @@ BASE_DIR_CANDIDATES: list[Path] = [
     Path.cwd().parent / "data" / "Gis-integro",
     Path("/mnt/data/prog_zip"),
     Path("/mnt/data"),
-    Path(r"C:\Users\janfi\OneDrive\Desktop\Прочее\Прогноз"),
 ]
+# Каталог вне проекта добавляется переменной окружения, а не правкой кода:
+# абсолютный путь одной машины делает пакет непереносимым.
+if (_extra := __import__("os").environ.get("GIS_DATA_DIR")):
+    BASE_DIR_CANDIDATES.insert(0, Path(_extra))
 # Архивы с данными, которые распаковываются, если папка не найдена напрямую.
 ZIP_CANDIDATES: list[Path] = [
     Path.cwd() / "data" / "Прогноз.zip",

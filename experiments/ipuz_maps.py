@@ -13,15 +13,18 @@
   * слепая карта (OOF)  — ``data/processed/operating_point_masked.parquet``,
     та самая, что даёт O10 = 0,1986 и 0,3623 без тренда.
 
-Экспорт только в PNG: ``rasterio`` закрыт политикой Smart App Control, поэтому
-GeoTIFF из ТЗ (``crit.tif``, ``oof_remote.tif``) этим скриптом не пишется.
+Экспорт в PNG. GeoTIFF из ТЗ (``crit.tif``, ``oof_remote.tif``,
+``overlap_class.tif``) и проверка геометрии — отдельный шаг
+``python -m experiments.ipuz_rasters``: там же сверяется O₁₀ = 455/2291 прямо
+по растру.
 
 Запуск::
 
-    python -m experiments.ipuz_maps <каталог_заморозки>
+    python -m experiments.ipuz_maps <каталог_заморозки> [--root <проект>]
 """
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -50,25 +53,42 @@ plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 8.5})
 
 
 # ------------------------------------------------------------------ подготовка
-def load(freeze: Path) -> dict:
-    """Собрать карты, маски и геометрию в один словарь."""
-    t = pd.read_csv(freeze / "01_inputs/target_mask.csv")
+def load(freeze: Path, root: Path = ROOT) -> dict:
+    """Собрать карты, маски и геометрию в один словарь.
+
+    ``root`` — каталог с ``data/processed``. По умолчанию это сам проект, но в
+    переносимом релизе данные лежат отдельно и путь приходит аргументом.
+    """
+    нужны = {
+        "target_mask.csv": freeze / "01_inputs/target_mask.csv",
+        "operating_point_masked.parquet":
+            root / "data/processed/operating_point_masked.parquet",
+        "dataset_v6.parquet": root / "data/processed/dataset_v6.parquet",
+        "s2_features.parquet": root / "data/processed/s2_features.parquet",
+    }
+    нет = {k: v for k, v in нужны.items() if not v.exists()}
+    if нет:
+        строки = ["Не найдены входные файлы — карты не собраны:"]
+        строки += ["  %-34s %s" % kv for kv in нет.items()]
+        строки.append("Каталог с данными задаётся ключом --root.")
+        raise SystemExit("\n".join(строки))
+    t = pd.read_csv(нужны["target_mask.csv"])
     x = t["x"].to_numpy(float)
     y = t["y"].to_numpy(float)
     valid = t["valid"].to_numpy(bool)
     # Перспективность по возрастанию: в формуле меньший балл = перспективнее.
     crit = -t["crit_score"].to_numpy(float)
 
-    op = pd.read_parquet(ROOT / "data/processed/operating_point_masked.parquet")
+    op = pd.read_parquet(нужны["operating_point_masked.parquet"])
     remote = op["score"].to_numpy(float)
 
-    feat = pd.read_parquet(ROOT / "data/processed/dataset_v6.parquet")
+    feat = pd.read_parquet(нужны["dataset_v6.parquet"])
     ast_cols = [c for c in feat.columns if c.startswith("ast_")]
     ast_cov = feat[ast_cols].notna().any(axis=1).to_numpy(bool)
     dem = feat["dem_elev"].to_numpy(float)
 
     bare = pd.read_parquet(
-        ROOT / "data/processed/s2_features.parquet")["s2_bare_frac"].to_numpy(float)
+        нужны["s2_features.parquet"])["s2_bare_frac"].to_numpy(float)
     bare_mask = np.isfinite(bare) & (bare >= 0.20)
 
     pool = valid & np.isfinite(remote)
@@ -232,20 +252,38 @@ def fig_overlap(d: dict, out: Path, a10: np.ndarray, b10: np.ndarray) -> float:
 # ------------------------------------------------------------ увеличенный фрагмент
 def pick_window(d: dict, a10: np.ndarray, b10: np.ndarray,
                 size: int = 40) -> tuple[int, int]:
-    """Окно ``size``×``size`` ячеек, где видны оба ядра и их расхождение.
+    """Окно фрагмента: сперва только пересекающие контур съёмки, иначе любое."""
+    win = _search_window(d, a10, b10, size, строго=True)
+    return win if win is not None else _search_window(
+        d, a10, b10, size, строго=False)
+
+
+def _search_window(d: dict, a10: np.ndarray, b10: np.ndarray, size: int,
+                   *, строго: bool) -> tuple[int, int] | None:
+    """Лучшее окно ``size``×``size`` ячеек; ``None``, если подходящих нет.
 
     Максимум расхождения сам по себе даёт окно, в котором одно из ядер почти
-    отсутствует и читателю нечего сравнивать. Поэтому в оценке участвует
-    меньшее из двух ядер, а расхождение добавляется с меньшим весом.
+    отсутствует и читателю нечего сравнивать, поэтому в оценке участвует
+    меньшее из двух ядер, а расхождение добавляется с меньшим весом. При
+    ``строго=True`` рассматриваются только окна, которые пересекает контур
+    ASTER: по ТЗ фрагмент должен показывать область отсутствия съёмки, иначе
+    подпись о границе наблюдаемости ничего не обозначает.
     """
     ga = a10.reshape(SHAPE).astype(float)
     gb = b10.reshape(SHAPE).astype(float)
     gx = (a10 ^ b10).reshape(SHAPE).astype(float)
-    best, pos = -1.0, (0, 0)
+    gast = np.asarray(d["ast_cov"], dtype=bool).reshape(SHAPE)
+    best, pos = -1.0, None
     for r in range(0, SHAPE[0] - size + 1, 4):
         for c in range(0, SHAPE[1] - size + 1, 4):
             sl = (slice(r, r + size), slice(c, c + size))
             na, nb = ga[sl].sum(), gb[sl].sum()
+            if na == 0 or nb == 0:
+                continue
+            frac = float(gast[sl].mean())
+            пересекает = 0.0 < frac < 1.0
+            if строго and not пересекает:
+                continue
             s = 2.0 * min(na, nb) + 0.5 * gx[sl].sum()
             if s > best:
                 best, pos = s, (r, c)
@@ -267,7 +305,7 @@ def fig_detail(d: dict, out: Path, a10: np.ndarray, b10: np.ndarray,
             np.asarray(v, dtype=float).reshape(SHAPE)[sl])
 
     fig, ax = plt.subplots(figsize=(7.0, 7.2))
-    fig.subplots_adjust(left=0.105, right=0.885, top=0.875, bottom=0.215)
+    fig.subplots_adjust(left=0.105, right=0.885, top=0.875, bottom=0.275)
     ax.set_facecolor(PLAIN)
     im = ax.imshow(sub(d["dem"]), extent=ext, origin="upper",
                    interpolation="nearest", cmap="Greys", zorder=1)
@@ -323,7 +361,7 @@ def fig_detail(d: dict, out: Path, a10: np.ndarray, b10: np.ndarray,
                label="открытый грунт ≥ 20 % площади ячейки"),
         Line2D([], [], color="#0f766e", lw=1.8,
                ls="-" if ast_crosses else "none", label=ast_label),
-    ], loc="lower center", bbox_to_anchor=(0.5, 0.035), frameon=False,
+    ], loc="lower center", bbox_to_anchor=(0.5, 0.085), frameon=False,
         fontsize=8, ncol=2)
     footer(fig, "Окно выбрано там, где присутствуют оба ядра. "
                 "Лист R-48-XI,XII, сетка 500 м.")
@@ -335,11 +373,17 @@ def fig_detail(d: dict, out: Path, a10: np.ndarray, b10: np.ndarray,
 
 # ----------------------------------------------------------------------- запуск
 def main() -> None:
-    freeze = Path(sys.argv[1])
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("freeze", type=Path, help="каталог заморозки")
+    ap.add_argument("--root", type=Path, default=ROOT,
+                    help="каталог с data/processed (по умолчанию корень проекта)")
+    a = ap.parse_args()
+
+    freeze = a.freeze.resolve()
     maps_dir = freeze / "05_maps"
     maps_dir.mkdir(parents=True, exist_ok=True)
 
-    d = load(freeze)
+    d = load(freeze, a.root.resolve())
     a10 = top_decile(d["crit"], d["pool"])
     b10 = top_decile(d["remote"], d["pool"])
     o10_raw = float((a10 & b10).sum() / a10.sum())
@@ -392,8 +436,10 @@ def main() -> None:
         "dpi": 300,
         "ограничение": ("500 м — размер расчётной ячейки, а не точность "
                         "исходных геологических границ"),
-        "не_выполнено": ("экспорт в GeoTIFF: rasterio закрыт политикой "
-                         "Smart App Control"),
+        "растры": ("crit.tif, oof_remote.tif, overlap_class.tif собираются "
+                   "скриптом experiments/ipuz_rasters.py в этот же каталог; "
+                   "их геометрия и классы проверены в "
+                   "raster_geometry_check.json"),
     }
     (maps_dir / "map_sources.json").write_text(
         json.dumps(sources, ensure_ascii=False, indent=2), encoding="utf-8")

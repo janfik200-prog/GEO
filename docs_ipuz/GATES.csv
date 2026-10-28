@@ -1,7 +1,7 @@
 gate,условие_приёмки,статус_до_работы,статус_сейчас,доказательство
 G0,"Манифест, право на источники, актуальные снимки репозитория",PARTIAL,PASS с оговоркой,RELEASE_MANIFEST.json; 07_repro_package/MANIFEST_SHA256.csv; право на карты остаётся за G8
 G1,"Переносимый проект из новой папки; без абсолютных путей машины",FAIL,PASS,qa/portability_check.json; qa/portable_run.log
-G2,"Целевой тест S2 плюс полный pytest на замороженном окружении",PARTIAL,PASS,03_runs/stdout_pytest_full.log — 240 passed, 0 skipped, exit 0
+G2,"Целевой тест S2 плюс полный pytest на замороженном окружении",PARTIAL,PASS с оговоркой,"03_runs/stdout_pytest_full.log — 240 passed, 0 skipped, exit 0; прогон на Python 3.13.15 при scikit-learn 1.9.1, не на закреплённом 3.12.10 — см. LIMITATIONS.md п. 14"
 G3,"Четыре метрики O10 и контроль интервалов по CSV; независимый O10 по растру",PASS для имеющихся файлов,PASS,04_metrics/main_metrics.csv; ceiling_metrics.csv; 05_maps/raster_geometry_check.json
 G4,"Геометрия фолдов, 15 км, утечка/преобразование/нормировка",PARTIAL,PASS,02_protocol/fold_geometry_audit.json — KD-дерево, покрытие, буфер
 G5,"Три карты из тех же GeoTIFF; читаемые подписи, система координат",PASS внутри архива,PASS,05_maps/*.png и *.tif; map_sources.json

@@ -35,13 +35,19 @@ def test_median_ignores_outlier_scene_and_min_obs_cuts_thin_pixels(monkeypatch):
                 v[1, 1] = np.nan
         fakes[i] = f
 
-    it = iter(fakes)
-    monkeypatch.setattr(s2_composite, "scene_on_grid", lambda *a, **k: next(it))
+    # median_composite зовёт scene_on_grid на каждый канал И на каждую сцену,
+    # поэтому общий одноразовый iter(fakes) истощается после первого канала.
+    # Сцену опознаём по её номеру и возвращаем тот же массив сколько угодно раз.
+    scenes = [{"fake_scene_id": i} for i in range(len(fakes))]
+    monkeypatch.setattr(
+        s2_composite, "scene_on_grid",
+        lambda scene, *args, **kwargs: fakes[scene["fake_scene_id"]],
+    )
 
     class Meta:
         prf, pic, dx, dy, x0, y_top = 2, 2, 500.0, 500.0, 0.0, 0.0
 
-    comp, n_obs = s2_composite.median_composite([{}, {}, {}], Meta, res_m=500.0)
+    comp, n_obs = s2_composite.median_composite(scenes, Meta, res_m=500.0)
     assert np.isclose(comp["b04"][0, 0], 1010.0)      # медиана, а не среднее 3336
     assert n_obs[1, 1] == 1
     assert np.isnan(comp["b04"][1, 1])                # < S2_MIN_OBS наблюдений

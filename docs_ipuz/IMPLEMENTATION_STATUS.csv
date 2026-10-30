@@ -6,9 +6,9 @@ WP03_RASTERS,VERIFIED,05_maps/raster_geometry_check.json,python -m experiments.i
 WP04_SPATIAL_SPLIT,VERIFIED,02_protocol/fold_geometry_audit.json; 02_protocol/fold_geometry_audit.csv,python -m experiments.ipuz_fold_audit --freeze <каталог>,0,,автор
 WP05_METRICS,VERIFIED,04_metrics/main_metrics.csv; 04_metrics/ceiling_metrics.csv; 05_maps/raster_geometry_check.json,python -m experiments.operating_point_masked,0,,автор
 WP06_ABLATIONS,VERIFIED,04_metrics/spectral_ablation.csv,python -m experiments.spectral_exposure_control,0,порог 2 % подобран на тех же полосах — оптимизм отбора не устранён,автор
-WP07_UNCERTAINTY,VERIFIED,04_metrics/o10_block_ci_reproduced.csv; o10_block_ci_draws.csv; o10_block_ci_meta.json,python -m experiments.ipuz_block_ci --freeze <каталог>,0,,автор
+WP07_UNCERTAINTY,VERIFIED,04_metrics/o10_block_ci_reproduced.csv; o10_block_ci_draws.csv; o10_block_ci_discrepancy.json,python -m experiments.ipuz_block_ci --freeze <каталог>,0,"первичная таблица 27.10 не содержит зерна генератора; расхождение границ объяснено разбросом метода, публикуются первичные значения",автор
 WP08_MAPS,VERIFIED,05_maps/map_pair.png; map_overlap.png; map_detail.png; map_sources.json,python 05_maps/make_maps.py,0,публикация требует разрешения правообладателя (WP12),автор
-WP09_ENVIRONMENT,VERIFIED,07_repro_package/env/env_lock.json; requirements_exact.txt; docs/README_REPRODUCE.md,python -m venv; pip install -r requirements_exact.txt,0,,автор
+WP09_ENVIRONMENT,VERIFIED,07_repro_package/env/env_lock.json; requirements_exact.txt; 03_runs/full_pipeline_rerun.json; 03_runs/stdout_full_pipeline.log,python -m experiments.operating_point_masked; python -m experiments.ipuz_full_rerun_check --freeze <каталог>,0,исходные сетки правообладателя в пакет не входят; полный прогон выполняется только на машине с данными,автор
 WP10_REFERENCES,VERIFIED,docs/REFERENCES_CHECK.md,сверка DOI по api.crossref.org,0,шаблон сборника с сайта не скачивался,автор
 WP11_DB,REPORT_ONLY,docs/DB_STATUS.md,чтение живой базы на 5433 без записи,0,не является проверкой геологической истинности; в числа статьи не входит,автор
 WP12_RIGHTS,BLOCKED,docs/LIMITATIONS.md п. 11,,,письменное разрешение организации на публикацию производных карт,владелец

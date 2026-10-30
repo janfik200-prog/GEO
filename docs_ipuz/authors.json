@@ -1,0 +1,16 @@
+{
+  "строка_авторов": "Г. Э. Стаценко\u00b9, Ю. В. Трофимов\u00b9\u002c\u00b2, А. Н. Аверкин\u00b9",
+  "аффилиации": [
+    "\u00b9 Государственный университет «Дубна», г. Дубна",
+    "\u00b2 Лаборатория информационных технологий им. М. Г. Мещерякова, ОИЯИ, г. Дубна",
+    "Г. Э. Стаценко — студент 3 курса, Институт системного анализа и управления; Ю. В. Трофимов — ассистент, младший научный сотрудник, инженер-программист, научный руководитель; А. Н. Аверкин — канд. физ.-мат. наук, доцент, руководитель НИЦ, научный руководитель",
+    "e-mail: gstatsenko073@gmail.com"
+  ],
+  "строка_авторов_en": "G. E. Statsenko\u00b9, Yu. V. Trofimov\u00b9\u002c\u00b2, A. N. Averkin\u00b9",
+  "аффилиации_en": [
+    "\u00b9 Dubna State University, Dubna, Russia",
+    "\u00b2 Meshcheryakov Laboratory of Information Technologies, JINR, Dubna, Russia",
+    "G. E. Statsenko — 3rd-year student, Institute of System Analysis and Control; Yu. V. Trofimov — assistant lecturer, junior researcher, software engineer, research supervisor; A. N. Averkin — Cand. Sci. (Phys.-Math.), associate professor, head of research centre, research supervisor",
+    "e-mail: gstatsenko073@gmail.com"
+  ]
+}

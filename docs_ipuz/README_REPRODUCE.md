@@ -41,8 +41,12 @@ python 07_repro_package/project/scripts/verify_handoff.py \
 
 # 5. Растры, карты и статья — из любого каталога
 python 05_maps/make_maps.py
-python 06_article/build_article.py
+python 06_article/build_article.py --freeze . --authors authors.json
 ```
+
+Без ключа `--authors` статья собирается с шаблонным авторским блоком и красной
+заметкой сверху. Файл `authors.json` лежит в корне релиза; именно из него
+собран `06_article/ARTICLE_FINAL.docx`.
 
 Шаги 3–5 независимы: успех одного не заменяет другой. У тестов и у пересчёта
 метрик отдельные отметки PASS/FAIL в `docs/IMPLEMENTATION_STATUS.csv`.

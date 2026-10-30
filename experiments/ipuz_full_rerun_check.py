@@ -104,6 +104,7 @@ def main() -> None:
         э = pd.read_parquet(эталон_pq)["score"].to_numpy(float)
         сравнение_массива = {
             "источник": str(эталон_pq.relative_to(freeze)),
+            "sha256_эталона": sha256(эталон_pq),
             "ячеек": int(массив.size),
             "совпало_точно": int((массив == э).sum()),
             "макс_разность": float(np.nanmax(np.abs(массив - э))),

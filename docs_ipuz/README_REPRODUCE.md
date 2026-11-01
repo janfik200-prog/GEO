@@ -42,6 +42,10 @@ python 07_repro_package/project/scripts/verify_handoff.py \
 # 5. Растры, карты и статья — из любого каталога
 python 05_maps/make_maps.py
 python 06_article/build_article.py --freeze . --authors authors.json
+
+# 6. Простые модели сравнения и пересчёт контролей — нужны закрытые сетки
+python -m experiments.ipuz_baseline_o10 --freeze .
+python -m experiments.ipuz_recount_controls .
 ```
 
 Без ключа `--authors` статья собирается с шаблонным авторским блоком и красной

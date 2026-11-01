@@ -33,19 +33,41 @@ from docx.shared import Cm, Pt, RGBColor
 
 УДК = "УДК 004.85"
 
+# Параметры вёрстки взяты из официального шаблона конференции
+# «Шаблон-статьи-для-молодежной-секции-1.docx» (conf-eekm.ru): поля
+# 3/1,5/2/2 см, основной текст 14 пт с отступом 1,25 см и одинарным
+# интервалом, служебные элементы (УДК, авторы, аннотация, подписи,
+# литература) — 12 пт, авторский блок по правому краю курсивом.
+КЕГЛЬ_ОСНОВНОЙ = 14
+КЕГЛЬ_СЛУЖЕБНЫЙ = 12
+КЕГЛЬ_ТАБЛИЦЫ = 11
+ОТСТУП_АБЗАЦА = 1.25
+# Ширина рисунков 1–3 в сантиметрах: подобрана так, чтобы английский блок не
+# оставался один на отдельной странице.
+ШИРИНА_РИСУНКОВ = (14.5, 11.0, 11.0)
+ИНТЕРВАЛ_ПЕРЕД = 12.0
+
 ЗАГОЛОВОК = ("ПРОСТРАНСТВЕННАЯ ОЦЕНКА ВОСПРОИЗВОДИМОСТИ КРИТЕРИАЛЬНОЙ КАРТЫ "
              "РУДНОЙ ПЕРСПЕКТИВНОСТИ ПО ДАННЫМ ДИСТАНЦИОННОГО ЗОНДИРОВАНИЯ")
 
 ЗАГОЛОВОК_EN = ("SPATIAL VALIDATION OF REMOTE-SENSING RECONSTRUCTION "
                 "OF A CRITERIA-BASED MINERAL PROSPECTIVITY MAP")
 
+# Форма блока — из шаблона молодёжной секции: сначала авторы, затем их
+# должности и организации под номерами, затем научные руководители.
 ШАБЛОН_АВТОРОВ = {
-    "строка_авторов": "Г. [И.] Стаценко¹, [соавторы — в порядке фактического вклада]",
-    "аффилиации": ["¹ [организация, подразделение, город]; "
-                   "e-mail: gstatsenko073@gmail.com"],
-    "строка_авторов_en": "G. [I.] Statsenko¹, [co-authors to be confirmed]",
-    "аффилиации_en": ["¹ [institution, department, city]; "
-                      "e-mail: gstatsenko073@gmail.com"],
+    "ru": [
+        {"текст": "Стаценко Г. Э.,", "жирный": True},
+        {"текст": "1. [степень, звание, должность, организация, город]"},
+        {"текст": "Научный руководитель: [Фамилия И. О.],", "жирный": True},
+        {"текст": "[степень, звание, должность, организация, город]"},
+    ],
+    "en": [
+        {"текст": "Statsenko G. E.,", "жирный": True},
+        {"текст": "1. [degree, title, position, place of work, city]"},
+        {"текст": "Research supervisor: [Last name F. P.],", "жирный": True},
+        {"текст": "[degree, title, position, place of work, city]"},
+    ],
     "шаблон": True,
 }
 
@@ -60,21 +82,22 @@ from docx.shared import Cm, Pt, RGBColor
 def стили(doc: Document) -> None:
     s = doc.sections[0]
     s.page_width, s.page_height = Cm(21.0), Cm(29.7)
-    s.left_margin, s.right_margin = Cm(2.5), Cm(2.0)
+    s.left_margin, s.right_margin = Cm(3.0), Cm(1.5)
     s.top_margin, s.bottom_margin = Cm(2.0), Cm(2.0)
 
     n = doc.styles["Normal"]
     n.font.name = "Times New Roman"
-    n.font.size = Pt(12)
-    n.paragraph_format.first_line_indent = Cm(1.0)
+    n.font.size = Pt(КЕГЛЬ_ОСНОВНОЙ)
+    n.paragraph_format.first_line_indent = Cm(ОТСТУП_АБЗАЦА)
     n.paragraph_format.space_after = Pt(0)
-    n.paragraph_format.line_spacing = 1.15
+    n.paragraph_format.line_spacing = 1.0
     n.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
 
 
 def абз(doc: Document, text: str, *, курсив: bool = False, жирный: bool = False,
         отступ: float | None = None, центр: bool = False,
         размер: float | None = None, перед: float = 0.0, после: float = 0.0,
+        справа: bool = False,
         цвет: tuple[int, int, int] | None = None) -> None:
     p = doc.add_paragraph()
     pf = p.paragraph_format
@@ -83,6 +106,8 @@ def абз(doc: Document, text: str, *, курсив: bool = False, жирный
         pf.first_line_indent = Cm(отступ)
     if центр:
         pf.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    elif справа:
+        pf.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     r = p.add_run(text)
     r.italic, r.bold = курсив, жирный
     if размер:
@@ -91,13 +116,39 @@ def абз(doc: Document, text: str, *, курсив: bool = False, жирный
         r.font.color.rgb = RGBColor(*цвет)
 
 
+def авторский_блок(doc: Document, блок: list[dict],
+                   *, перед: float = 0.0) -> None:
+    """Авторы по форме шаблона: по правому краю, курсивом, ФИО — полужирным."""
+    for i, строка in enumerate(блок):
+        абз(doc, строка["текст"], отступ=0.0, справа=True,
+            курсив=строка.get("курсив", True),
+            жирный=строка.get("жирный", False),
+            размер=КЕГЛЬ_СЛУЖЕБНЫЙ,
+            перед=(перед if i == 0 else 0.0))
+
+
+def склеить_хвост(doc: Document, с_текста: str) -> None:
+    """Не разрывать финальный блок статьи.
+
+    Литература и английская часть переносятся на страницу целиком: иначе
+    английская аннотация остаётся одна на отдельной последней странице.
+    """
+    начало = next((i for i, p in enumerate(doc.paragraphs)
+                   if p.text.startswith(с_текста)), None)
+    if начало is None:
+        raise SystemExit("Не найден абзац «%s» для склейки хвоста" % с_текста)
+    for p in doc.paragraphs[начало:-1]:
+        p.paragraph_format.keep_with_next = True
+
+
 def раздел(doc: Document, text: str) -> None:
     абз(doc, text, жирный=True, отступ=0.0, центр=True, перед=10, после=4)
 
 
 def таблица(doc: Document, подпись: str, шапка: list[str],
             строки: list[list[str]], ширины: list[float]) -> None:
-    абз(doc, подпись, отступ=0.0, перед=8, после=3, размер=11)
+    абз(doc, подпись, отступ=0.0, справа=True, перед=ИНТЕРВАЛ_ПЕРЕД,
+        после=3, размер=КЕГЛЬ_СЛУЖЕБНЫЙ)
     t = doc.add_table(rows=1, cols=len(шапка))
     t.style = "Table Grid"
     t.alignment = WD_TABLE_ALIGNMENT.CENTER
@@ -111,7 +162,7 @@ def таблица(doc: Document, подпись: str, шапка: list[str],
         p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
         r = p.add_run(h)
         r.bold = True
-        r.font.size = Pt(10.5)
+        r.font.size = Pt(КЕГЛЬ_ТАБЛИЦЫ)
     for row in строки:
         cells = t.add_row().cells
         for i, (v, w) in enumerate(zip(row, ширины)):
@@ -122,7 +173,7 @@ def таблица(doc: Document, подпись: str, шапка: list[str],
             if i:
                 p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
             r = p.add_run(v)
-            r.font.size = Pt(10.5)
+            r.font.size = Pt(КЕГЛЬ_ТАБЛИЦЫ)
 
 
 def рисунок(doc: Document, путь: Path, подпись: str, ширина_см: float) -> None:
@@ -134,7 +185,8 @@ def рисунок(doc: Document, путь: Path, подпись: str, шири�
     p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
     p.paragraph_format.space_before = Pt(8)
     p.add_run().add_picture(str(путь), width=Cm(ширина_см))
-    абз(doc, подпись, отступ=0.0, после=8, размер=10.5)
+    абз(doc, подпись, отступ=0.0, центр=True, после=ИНТЕРВАЛ_ПЕРЕД,
+        размер=КЕГЛЬ_СЛУЖЕБНЫЙ)
 
 
 # ------------------------------------------------------------------- числа
@@ -276,10 +328,8 @@ def собрать(freeze: Path, maps: Path, авторы: dict, out: Path) -> d
         абз(doc, ЗАМЕТКА, отступ=0.0, после=8, размер=10,
             курсив=True, цвет=(0xB0, 0x00, 0x20))
 
-    абз(doc, УДК, отступ=0.0, после=6, размер=11)
-    абз(doc, авторы["строка_авторов"], отступ=0.0, центр=True, после=2)
-    for a in авторы["аффилиации"]:
-        абз(doc, a, отступ=0.0, центр=True, после=2, размер=10.5)
+    абз(doc, УДК, отступ=0.0, после=6, размер=КЕГЛЬ_СЛУЖЕБНЫЙ)
+    авторский_блок(doc, авторы["ru"])
     абз(doc, ЗАГОЛОВОК, жирный=True, отступ=0.0, центр=True, перед=8, после=8)
 
     абз(doc, "Аннотация. Проверено, насколько дистанционные признаки способны "
@@ -299,11 +349,12 @@ def собрать(freeze: Path, maps: Path, авторы: dict, out: Path) -> d
         "месторождения."
         % (чц(ч["валидных"]), ч3(ч["o10_сырое"]), ч3(ч["o10_без_тренда"]),
            ч3(ч["потолок_сырое"]), ч3(ч["потолок_без_тренда"])),
-        отступ=0.0, после=4, размер=11)
-    абз(doc, "Ключевые слова: минерагеническая перспективность, дистанционное "
+        отступ=1.0, после=4, размер=КЕГЛЬ_СЛУЖЕБНЫЙ)
+    абз(doc, "КЛЮЧЕВЫЕ СЛОВА: минерагеническая перспективность, дистанционное "
         "зондирование, пространственная валидация, псевдоразметка, "
         "региональный тренд, географическое запоминание, воспроизводимость.",
-        отступ=0.0, после=4, размер=11, курсив=True)
+        отступ=1.0, после=4, размер=КЕГЛЬ_СЛУЖЕБНЫЙ, курсив=True,
+        жирный=True)
 
     # --- введение
     раздел(doc, "ВВЕДЕНИЕ")
@@ -531,24 +582,24 @@ def собрать(freeze: Path, maps: Path, авторы: dict, out: Path) -> d
         "ложность каждой выделенной зоны, но указывает, какие признаки рисунка "
         "требуют отдельной проверки.")
     рисунок(doc, maps / "map_pair.png",
-             "Рис. 1. Критериальная карта (а) и предсказания модели на "
+             "Рис. 1 – Критериальная карта (а) и предсказания модели на "
              "пространственно отложенных полосах (б). Лист R-48-XI,XII, сетка "
              "500 м, поперечная Меркатора, осевой меридиан 105° в. д., "
              "эллипсоид Красовского. Шкала рангов и палитра общие для обеих "
-             "карт.", 16.0)
+             "карт.", ШИРИНА_РИСУНКОВ[0])
     рисунок(doc, maps / "map_overlap.png",
-             "Рис. 2. Совпадение верхних децилей двух карт: общих %s ячеек, "
+             "Рис. 2 – Совпадение верхних децилей двух карт: общих %s ячеек, "
              "только критериальная карта — %s, только дистанционная — %s. "
              "Ядра равны по площади, по %s ячейке."
              % (чц(ч["классы"]["4"] if "классы" in ч else 455),
                 чц(ч["классы"]["2"] if "классы" in ч else 1836),
                 чц(ч["классы"]["3"] if "классы" in ч else 1836),
-                чц(ч["ядро_эталона"])), 12.5)
+                чц(ч["ядро_эталона"])), ШИРИНА_РИСУНКОВ[1])
     рисунок(doc, maps / "map_detail.png",
-             "Рис. 3. Участок 20 × 20 км: рельеф, ядра двух карт, маска "
+             "Рис. 3 – Участок 20 × 20 км: рельеф, ядра двух карт, маска "
              "обнажённости и граница съёмки ASTER. Прямолинейные границы "
              "рисунка модели отражают процедуру объединения полос, а не "
-             "геологический контакт.", 12.5)
+             "геологический контакт.", ШИРИНА_РИСУНКОВ[2])
 
     # --- обсуждение
     раздел(doc, "ОБСУЖДЕНИЕ И ОГРАНИЧЕНИЯ")
@@ -605,7 +656,7 @@ def собрать(freeze: Path, maps: Path, авторы: dict, out: Path) -> d
         "меток и внешнего испытания.")
 
     # --- литература
-    раздел(doc, "ЛИТЕРАТУРА")
+    раздел(doc, "ЛИТЕРАТУРА:")
     for s in [
         "1. Roberts D. R., Bahn V., Ciuti S. et al. Cross-validation strategies "
         "for data with temporal, spatial, hierarchical, or phylogenetic "
@@ -633,13 +684,10 @@ def собрать(freeze: Path, maps: Path, авторы: dict, out: Path) -> d
         "// Minerals. 2026. Vol. 16. Article 1066. "
         "DOI: 10.3390/min16101066.",
     ]:
-        абз(doc, s, отступ=0.0, после=2, размер=10.5)
+        абз(doc, s, отступ=0.0, после=2, размер=КЕГЛЬ_СЛУЖЕБНЫЙ)
 
     # --- английский блок
-    абз(doc, авторы["строка_авторов_en"], отступ=0.0, центр=True, перед=10,
-        после=2)
-    for a in авторы["аффилиации_en"]:
-        абз(doc, a, отступ=0.0, центр=True, после=2, размер=10.5)
+    авторский_блок(doc, авторы["en"], перед=ИНТЕРВАЛ_ПЕРЕД)
     абз(doc, ЗАГОЛОВОК_EN, жирный=True, отступ=0.0, центр=True, перед=6,
         после=6)
     абз(doc, "Abstract. This study examines the ability of remotely sensed "
@@ -661,10 +709,13 @@ def собрать(freeze: Path, maps: Path, авторы: dict, out: Path) -> d
            "%.3f" % ч["ci_сырое"][1], "%.3f" % ч["ci_без_тренда"][0],
            "%.3f" % ч["ci_без_тренда"][1], "%.3f" % ч["потолок_сырое"],
            "%.3f" % ч["потолок_без_тренда"]),
-        отступ=0.0, после=4, размер=11)
-    абз(doc, "Keywords: mineral prospectivity, spatial validation, surrogate "
+        отступ=1.0, после=4, размер=КЕГЛЬ_СЛУЖЕБНЫЙ)
+    абз(doc, "KEYWORDS: mineral prospectivity, spatial validation, surrogate "
         "target, remote sensing, geographic memorisation, uncertainty, "
-        "reproducibility.", отступ=0.0, размер=11, курсив=True)
+        "reproducibility.", отступ=1.0, размер=КЕГЛЬ_СЛУЖЕБНЫЙ,
+        курсив=True, жирный=True)
+
+    склеить_хвост(doc, "ЛИТЕРАТУРА")
 
     out.parent.mkdir(parents=True, exist_ok=True)
     doc.save(out)

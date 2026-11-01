@@ -12,5 +12,5 @@ WP09_ENVIRONMENT,VERIFIED,07_repro_package/env/env_lock.json; requirements_exact
 WP10_REFERENCES,VERIFIED,docs/REFERENCES_CHECK.md,сверка DOI по api.crossref.org,0,шаблон сборника с сайта не скачивался,автор
 WP11_DB,REPORT_ONLY,docs/DB_STATUS.md,чтение живой базы на 5433 без записи,0,не является проверкой геологической истинности; в числа статьи не входит,автор
 WP12_RIGHTS,BLOCKED,docs/LIMITATIONS.md п. 11,,,письменное разрешение организации на публикацию производных карт,владелец
-WP13_ARTICLE,VERIFIED,06_article/ARTICLE_FINAL.docx (8 страниц),python 06_article/build_article.py --freeze . --authors authors.json,0,"авторский блок закрыт 30.10.2026 (authors.json), шаблонной заметки в статье нет",автор
+WP13_ARTICLE,VERIFIED,06_article/ARTICLE_FINAL.docx (8 страниц),python 06_article/build_article.py --freeze . --authors authors.json,0,"авторский блок закрыт 30.10.2026 (authors.json); вёрстка по официальному шаблону молодёжной секции, сверка — docs/TEMPLATE_CHECK.md",автор
 WP14_EXTERNAL_FUTURE,NOT_EVALUATED,docs/NEXT_STUDY_TZ.md,,,нет внешней территории с независимыми метками,владелец

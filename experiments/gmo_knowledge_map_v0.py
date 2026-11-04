@@ -109,10 +109,11 @@ def load() -> pd.DataFrame:
         df = df.drop(columns=lin).merge(
             lc[["row", "col"] + [c.replace("lin_", "linc_") for c in lin]]
             .rename(columns=lambda c: c.replace("linc_", "lin_")), on=["row", "col"], how="left")
-    # Северо-запад: азимут 315°, удвоенный — 270°: cos = 0, sin = −1. Совпадение
-    # направления линеаментов с ним — проекция на (0, −1). Соглашение об азимуте
-    # (от севера по часовой) взято из словаря признаков — проверить по картам.
-    df["nw_align"] = -df.lin_dir_sin
+    # Северо-запад. Угол линеамента в `src/lineaments.py` — от востока в кадре
+    # со строкой 0 на севере, а не азимут: lin_dir_sin = sin 2θ = −sin(2·азимут).
+    # Отрезок СЗ–ЮВ даёт lin_dir_sin = +1 (проверено синтетическим отрезком
+    # 05.11.2026). В v0–v0.2 стояло −lin_dir_sin — К5 поощрял северо-восток.
+    df["nw_align"] = df.lin_dir_sin
     exposed = spectral_mask.exposure_mask(df)
     for c in df.columns:
         if c.startswith(SPECTRAL) and c != spectral_mask.BARE_COL:

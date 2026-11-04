@@ -51,6 +51,8 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 DATA = ROOT / "data/processed/dataset_v5_rebuilt.parquet"
 K23 = ROOT / "data/processed/k23_svity_grid.parquet"
+LINC = ROOT / "data/processed/lineament_clean.parquet"
+CLEAN = False   # --чистые-линеаменты: lin_* заменяются на linc_* (вне долин)
 OUT = ROOT / "data/processed/knowledge_map_v0.parquet"
 TAG = "_v0"
 FAULT = "О1 разломная зона"
@@ -99,6 +101,14 @@ def load() -> pd.DataFrame:
                                         "lin_dir_cos", "lin_dir_sin"] + feats)
     df = df.merge(pd.read_parquet(K23, columns=["row", "col", "svk_cover", "svk_list"]),
                   on=["row", "col"], how="left")
+    lc = pd.read_parquet(LINC)
+    df = df.merge(lc[["row", "col", "dist_thalweg"]], on=["row", "col"], how="left")
+    if CLEAN:
+        # Отрезки вдоль тальвегов убраны (experiments/gmo_lineaments_clean.py)
+        lin = [c for c in df.columns if c.startswith("lin_")]
+        df = df.drop(columns=lin).merge(
+            lc[["row", "col"] + [c.replace("lin_", "linc_") for c in lin]]
+            .rename(columns=lambda c: c.replace("linc_", "lin_")), on=["row", "col"], how="left")
     # Северо-запад: азимут 315°, удвоенный — 270°: cos = 0, sin = −1. Совпадение
     # направления линеаментов с ним — проекция на (0, −1). Соглашение об азимуте
     # (от севера по часовой) взято из словаря признаков — проверить по картам.
@@ -166,11 +176,16 @@ def build(df: pd.DataFrame) -> pd.DataFrame:
         else:
             better = cand.итог > best.итог
             best[better] = cand[better]
-    return pd.concat([df[["row", "col", "x", "y"]], best], axis=1)
+    return pd.concat([df[["row", "col", "x", "y", "dist_thalweg"]], best], axis=1)
 
 
 def verify(m: pd.DataFrame) -> None:
     """Только заверка: с критериальной картой и с золотом. Не мишень."""
+    from scipy.stats import spearmanr as sp
+    print("\nПовторяет ли карта речную сеть: ρ с расстоянием до тальвега — "
+          + ", ".join(f"{c.replace('звено ', '')} {sp(m[c], m.dist_thalweg, nan_policy='omit').statistic:+.2f}"
+                      for c in m.columns if c.startswith("звено ") and m[c].notna().any())
+          + f", итог {sp(m.итог, m.dist_thalweg, nan_policy='omit').statistic:+.2f}")
     from src import criterial_target
     meta, prog = criterial_target.load_prognoz_grid()
     p = np.asarray(prog).reshape(meta.prf, meta.pic)[m.row, m.col]
@@ -236,10 +251,13 @@ def main() -> None:
     # накопления», и карта повторяла современную речную сеть (Г6: палеорельеф
     # не наблюдается; пробы по рыхлым отбирают в долинах — совпадение с ними
     # ложное).
-    global TAG
-    if "--без-долин" in sys.argv:
+    global TAG, CLEAN
+    if "--без-долин" in sys.argv or "--чистые-линеаменты" in sys.argv:
         del MODEL["Н место накопления"]["О14 впадины"]
         TAG = "_v0_1"
+    if "--чистые-линеаменты" in sys.argv:
+        # v0.2: v0.1 + линеаменты без отрезков вдоль долин
+        CLEAN, TAG = True, "_v0_2"
     df = load()
     m = build(df)
     m.to_parquet(OUT.with_name(f"knowledge_map{TAG}.parquet"), index=False)

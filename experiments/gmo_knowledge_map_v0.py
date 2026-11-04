@@ -239,7 +239,8 @@ def draw(m: pd.DataFrame) -> None:
         ax.set_title(col.replace("звено ", "звено: "), fontsize=10)
         ax.set_xticks([]); ax.set_yticks([])
         fig.colorbar(im, ax=ax, shrink=0.75, label="доля 0–1")
-    fig.suptitle("Пробная карта на знаниях v0, вариант А (свои каналы), лист R-48-XI,XII, "
+    ver = TAG.lstrip("_").replace("_", ".")
+    fig.suptitle(f"Пробная карта на знаниях {ver}, вариант А (свои каналы), лист R-48-XI,XII, "
                  "сетка 500 м. Звено «сохранность» не наблюдается", fontsize=11)
     fig.tight_layout()
     out = outputs.png(f"gmo_knowledge_map{TAG}.png")

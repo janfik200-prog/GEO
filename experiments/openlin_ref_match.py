@@ -316,6 +316,10 @@ def main() -> None:
     w = dict(np.load(COMP / f"winter_{a.site}_20m_лист.npz"))
     o = np.load(M / f"openlin_zone_lines_{a.site}_v3_настройка1.npz")
     r = np.load(M / f"openlin_zone_lines_{a.site}_v3_рельеф1.npz")
+    # RELU2 (ложбины, объявление 05.11.2026): если прогон есть, в сравнение
+    # входят ещё «ложбины» и «снимок + рельеф + ложбины» (то же правило сложения)
+    pv = M / f"openlin_zone_lines_{a.site}_v3_ложбины1.npz"
+    v = np.load(pv) if pv.exists() else None
     res = float(w["res_m"])
     shape = o["C_all"].shape
     valid = np.isfinite(w["shade"][:shape[0], :shape[1]])
@@ -331,6 +335,11 @@ def main() -> None:
     for fam, key in (("весь лист", "C_all"), ("в зонах", "C")):
         om, rm = o[key][:shape[0], :shape[1]], r[key][:shape[0], :shape[1]]
         sets = {"снимок": om, "рельеф": rm, "снимок + рельеф": om | add_new(rm, om, res)}
+        if v is not None:
+            vm = v[key][:shape[0], :shape[1]]
+            base = sets["снимок + рельеф"]
+            sets["ложбины"] = vm
+            sets["снимок + рельеф + ложбины"] = base | add_new(vm, base, res)
         ev = {}
         for s, m in sets.items():
             ev[s] = evaluate(m, pos, res)
@@ -353,7 +362,7 @@ def main() -> None:
                              нуль_напр=rn, линий_длинных=ll["n_long"],
                              найдено_линий=ll["obs"], нуль_линий=ll["null"]))
     print("\nпары «в зонах / весь лист» одного метода (K по более короткому):")
-    for s in ("снимок", "рельеф", "снимок + рельеф"):
+    for s in [k for f, k in res_by if f == "весь лист"]:
         lz, mz = res_by[("в зонах", s)]
         la, ma = res_by[("весь лист", s)]
         K = int(np.floor(min(lz.sum(), la.sum()) / LEN_STEP_KM))

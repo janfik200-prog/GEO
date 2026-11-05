@@ -32,6 +32,11 @@
 Запуск::
 
     python -X utf8 -m experiments.gmo_knowledge_map_v0
+    python -X utf8 -m experiments.gmo_knowledge_map_v0 --чистые-линеаменты   # v0.2
+    python -X utf8 -m experiments.gmo_knowledge_map_v0 --вариант-б           # v0.2, вариант Б
+
+Вариант Б — v0.2 плюс слои формулы ⚠ (`FORMULA`); с картой ВНИГНИ не
+сверяется (Ог2), выход `knowledge_map_v0_2_b.parquet`.
 """
 from __future__ import annotations
 
@@ -92,6 +97,26 @@ SPECTRAL = ("ast_", "s2_", "l8_")
 #: место накопления = min(доля свит из списка, лучшее из мест) — нечёткое «и».
 #: В первой сборке О11 стоял в «или» и насыщал звено: свиты — 86% листа.
 HOST = {"Н место накопления": ("О11 свиты из списка", "svk_list")}
+
+#: Вариант Б (ключ --вариант-б, поверх v0.2): к своим каналам добавлены слои
+#: критериальной формулы ⚠ — ровно там, где они записаны в таблице критериев
+#: черновика (разд. 5). Ог2: вариант Б с картой ВНИГНИ не сверяется — это
+#: были бы её же входы. Не добавлены: ⚠`geo2_strike_*` в К5 и К21 — это
+#: азимут несогласия, а не простирание разломов (выяснено на Г4, 05.11.2026);
+#: К6 (несогласие × разломная зона) — производный, ждёт решения по Ог1.
+FORMULA = {
+    ("И источник", FAULT, "К2 близость к разломной зоне"): [("dist_tect1", "↓"), ("dist_tect2", "↓")],
+    ("П путь", FAULT, "К3 раздробленность блока"): [("dens_tect", "↑")],
+    ("Н место накопления", FAULT, "К1 узлы пересечения"): [("geo2_fault_node", "↓")],
+    ("П путь", "О2 региональное несогласие", "К7 близость к несогласию"): [("geo2_contact", "↓")],
+    ("И источник", "О4 интрузии", "К9 близость к дайке"): [("dist_magm", "↓")],
+    ("И источник", "О4 интрузии", "К10 насыщенность магматитами"): [("dens_magm", "↑")],
+    ("Н место накопления", "О10 коры выветривания", "К19 близость к коре"): [("dist_struct", "↓")],
+    ("Н место накопления", "О13 грубообломочные фации", "К25 благоприятная фация"): [("dist_facies", "↓"),
+                                                                             ("geo2_facies2", "↓")],
+    ("Н место накопления", "О14 впадины", "К26 палеодолины"): [("dist_paleo", "↓")],
+}
+VARIANT = "А"
 
 
 def load() -> pd.DataFrame:
@@ -187,6 +212,9 @@ def verify(m: pd.DataFrame) -> None:
           + ", ".join(f"{c.replace('звено ', '')} {sp(m[c], m.dist_thalweg, nan_policy='omit').statistic:+.2f}"
                       for c in m.columns if c.startswith("звено ") and m[c].notna().any())
           + f", итог {sp(m.итог, m.dist_thalweg, nan_policy='omit').statistic:+.2f}")
+    if VARIANT == "Б":
+        print("\nВариант Б с картой ВНИГНИ не сверяется (Ог2): слои формулы — её же входы.")
+        return
     from src import criterial_target
     meta, prog = criterial_target.load_prognoz_grid()
     p = np.asarray(prog).reshape(meta.prf, meta.pic)[m.row, m.col]
@@ -240,7 +268,8 @@ def draw(m: pd.DataFrame) -> None:
         ax.set_xticks([]); ax.set_yticks([])
         fig.colorbar(im, ax=ax, shrink=0.75, label="доля 0–1")
     ver = TAG.lstrip("_").replace("_", ".")
-    fig.suptitle(f"Пробная карта на знаниях {ver}, вариант А (свои каналы), лист R-48-XI,XII, "
+    kind = "А (свои каналы)" if VARIANT == "А" else "Б (свои каналы и слои формулы ⚠)"
+    fig.suptitle(f"Пробная карта на знаниях {ver}, вариант {kind}, лист R-48-XI,XII, "
                  "сетка 500 м. Звено «сохранность» не наблюдается", fontsize=11)
     fig.tight_layout()
     out = outputs.png(f"gmo_knowledge_map{TAG}.png")
@@ -253,13 +282,19 @@ def main() -> None:
     # накопления», и карта повторяла современную речную сеть (Г6: палеорельеф
     # не наблюдается; пробы по рыхлым отбирают в долинах — совпадение с ними
     # ложное).
-    global TAG, CLEAN
-    if "--без-долин" in sys.argv or "--чистые-линеаменты" in sys.argv:
+    global TAG, CLEAN, VARIANT
+    b = "--вариант-б" in sys.argv
+    if "--без-долин" in sys.argv or "--чистые-линеаменты" in sys.argv or b:
         del MODEL["Н место накопления"]["О14 впадины"]
         TAG = "_v0_1"
-    if "--чистые-линеаменты" in sys.argv:
+    if "--чистые-линеаменты" in sys.argv or b:
         # v0.2: v0.1 + линеаменты без отрезков вдоль долин
         CLEAN, TAG = True, "_v0_2"
+    if b:
+        # Вариант Б поверх v0.2; О14 возвращается только с палеодолинами формулы
+        VARIANT, TAG = "Б", "_v0_2_b"
+        for (link, obj, crit), fl in FORMULA.items():
+            MODEL[link].setdefault(obj, {}).setdefault(crit, []).extend(fl)
     df = load()
     m = build(df)
     m.to_parquet(OUT.with_name(f"knowledge_map{TAG}.parquet"), index=False)

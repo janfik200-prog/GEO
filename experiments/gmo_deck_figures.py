@@ -8,6 +8,8 @@
   `experiments/gmo_svita_labels.py`);
 * `gmo_map_v0_2_deck.png` — итог и уверенность пробной карты v0.2, отмечена
   ячейка-пример слайда «одна ячейка — цепочка назад»;
+* `gmo_map_v0_2_b_deck.png` — то же для варианта Б (слои формулы ⚠), та же
+  ячейка-пример;
 * `gmo_lineaments_deck.png` — отрезки вне долин и вдоль долин поверх отмывки
   (`experiments/gmo_lineaments_clean.py`);
 * `gmo_h7_deck.png` — высота рельефа по подразделениям (данные и расчёт — `experiments/gmo_h2_h7_checks.py`).
@@ -90,13 +92,15 @@ def h7() -> None:
     print(f"Рисунок: {out}")
 
 
-def map_v02() -> None:
-    m = pd.read_parquet(ROOT / "data/processed/knowledge_map_v0_2.parquet")
+def map_v02(src: str = "knowledge_map_v0_2", out_name: str = "gmo_map_v0_2_deck.png") -> None:
+    m = pd.read_parquet(ROOT / f"data/processed/{src}.parquet")
     nrow, ncol = int(m.row.max()) + 1, int(m.col.max()) + 1
     x0 = (m.x - (m.col + 0.5) * 500).iloc[0] / 1e3
     ytop = (m.y + (m.row + 0.5) * 500).iloc[0] / 1e3
     ext = [x0, x0 + ncol * 0.5, ytop - nrow * 0.5, ytop]
-    ex = m.nlargest(1, "итог").iloc[0]          # ячейка-пример: 115, 28
+    # Ячейка-пример всегда из варианта А (115, 28) — на варианте Б та же ячейка
+    a = pd.read_parquet(ROOT / "data/processed/knowledge_map_v0_2.parquet").nlargest(1, "итог").iloc[0]
+    ex = m[(m.row == a.row) & (m.col == a.col)].iloc[0]
     lon, lat = gpd.GeoSeries(gpd.points_from_xy([ex.x], [ex.y]), crs=anabar_inset.SHEET_CRS).to_crs(4326).iloc[0].coords[0]
     fig, axs = plt.subplots(1, 2, figsize=(11, 5.6))
     for ax, col, cm, ttl in ((axs[0], "итог", "viridis", "Итог ячейки"),
@@ -116,7 +120,7 @@ def map_v02() -> None:
     fig.text(0.5, 0.02, "Белое — ячейка не покрыта геологической картой свит", ha="center",
              fontsize=12, color="0.3")
     fig.tight_layout(rect=(0, 0.05, 1, 1))
-    out = outputs.png("gmo_map_v0_2_deck.png")
+    out = outputs.png(out_name)
     mapstyle.save_fig(fig, out, dpi=160)
     print(f"Рисунок: {out}; пример {lon:.3f}, {lat:.3f}")
 
@@ -158,4 +162,5 @@ if __name__ == "__main__":
     svity()
     h7()
     map_v02()
+    map_v02("knowledge_map_v0_2_b", "gmo_map_v0_2_b_deck.png")   # вариант Б
     lineaments_panel()

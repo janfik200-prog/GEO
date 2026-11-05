@@ -778,6 +778,42 @@ RELU2_N_TESTS = 6
 RELU2_ALPHA = 0.05 / (RELU2_N_TESTS_PRIOR + RELU2_N_TESTS)      # 0.000352
 RELU2_SHIFT_N = 6000
 
+#: ЛОЖБИНЫ, ПОДТВЕРЖДЕНИЕ СНИМКОМ — RELU3 (05.11.2026, объявлено ДО прогона;
+#: код тракта допишет основная сессия по этому объявлению, здесь только константы).
+#: ПОВОД. Аудит RELU2 (05.11.2026): не принят (мусор 65.7 %, лист 76 % против
+#: 59.7 %, длина 1.3 %). Причина измерена: GLO-30 и ALOS когерентны 0.96-0.99 в
+#: полосе ядра, отклик ложбин GLO/ALOS коррелирует 0.974; совместная фазовая
+#: подделка сохраняет эту связь, «подтверждение вторым рельефом» проверяет
+#: согласие двух моделей одной поверхности; сдвиговый p для рельефа — тавтология.
+#: ЧТО ПРОВЕРЯЕТСЯ: проходят ли ложбины четыре условия, если подтверждать
+#: независимым по физике входом (зимний снимок) и рвать связь в подделке.
+#: МЕТОД. Вход и отклик как у RELU2 (высота GLO-30, ``valley_response``, те же
+#: SIGMAS; ограничение ядра 20-40 м против ложбин в сотни метров остаётся и
+#: записано). ПОДТВЕРЖДЕНИЕ — двумя половинами зимнего снимка Утсйоки (те же А/Б,
+#: что у UTS1, ``build_halves``; свой ``ridge_response`` и трассировка, как у
+#: снимка): линия засчитывается, если >= 30 % длины в 60 м от линий КАЖДОЙ
+#: половины. ПОДДЕЛКА — фазовая подделка ТОЛЬКО рельефа (``openlin_kora.surrogate``
+#: по одной высоте GLO), половины снимка настоящие: рвётся связь «рельеф — снимок»,
+#: спектр рельефа сохраняется; N_FAKES как в тракте. СДВИГОВЫЙ НУЛЬ — как в тракте
+#: (сдвиг линий относительно карт половин), теперь осмыслен: половины независимы
+#: от рельефа. УСТОЙЧИВОСТЬ — возмущение рельефа ``perturb``, как у RELU1/2.
+#: ОТКУДА ЧИСЛА. Новых чисел тракта нет: SIGMAS, 30 %, 60 м, 500 м, 127 м,
+#: N_FAKES — замороженные из TWIN/RELU2. Новые только счётчик и сдвиги.
+#: УСЛОВИЯ — те же четыре, два набора; пороги не двигаются после прогона.
+#: МЕРА СРАВНЕНИЯ — главная S (``openlin_ref_match``), описательно.
+#: СЧЁТЧИК. Настройка на Утсйоки, в цепочку НЕ входит. RELU2 учтён как проба
+#: семьи против тех же 63 линий: prior = 136 + 6 (RELU2) = 142; своих 6;
+#: alpha = 0.05 / (142 + 6) = 0.05 / 148 = 0.000338. Сдвигов n >= 2/alpha - 1 =
+#: 5919; берётся 6000 (как RELU1/2), пол 1/6001 = 0.000167 <= alpha/2 = 0.000169,
+#: запас alpha * 6001 = 2.03x (>= 2, достижимо).
+#: Ключ ``--ложбины-снимок`` — только ``--site utsjoki``, только TWIN, тег файла
+#: ``_ложбины2``; несовместим с ``--рельеф``, ``--ложбины``, ``--перенос``,
+#: ``--настройка0``, ``--настройка1``.
+RELU3_N_TESTS_PRIOR = RELU2_N_TESTS_PRIOR + RELU2_N_TESTS       # 142 (в цепочку не входит)
+RELU3_N_TESTS = 6
+RELU3_ALPHA = 0.05 / (RELU3_N_TESTS_PRIOR + RELU3_N_TESTS)      # 0.000338
+RELU3_SHIFT_N = 6000
+
 
 def _wide_open(zb: np.ndarray, p, q) -> np.ndarray:
     """Окно отклика с концами, выведенными из оценки (они лежат на гребнях)."""
@@ -1370,6 +1406,10 @@ def main() -> None:
     ap.add_argument("--рельеф", dest="relief", action="store_true",
                     help="тот же тракт по уклону GLO-30, подтверждение уклоном "
                          "ALOS (см. RELU1_* в шапке); только --site utsjoki")
+    ap.add_argument("--ложбины-снимок", dest="valleys2", action="store_true",
+                    help="ложбины по высоте GLO-30, подтверждение двумя половинами "
+                         "зимнего снимка, подделка — только рельефа (см. RELU3_* "
+                         "в шапке); только --site utsjoki")
     ap.add_argument("--ложбины", dest="valleys", action="store_true",
                     help="тот же тракт по высоте GLO-30, отклик — оси ложбин, "
                          "подтверждение высотой ALOS (см. RELU2_* в шапке); "
@@ -1480,6 +1520,20 @@ def main() -> None:
         p_max, n_sh = RELU2_ALPHA, RELU2_SHIFT_N
         n_total = RELU2_N_TESTS_PRIOR + RELU2_N_TESTS
         tag = "_ложбины1"
+    if a.valleys2:
+        if (not a.twin or a.xfer or a.tune0 or a.tune1 or a.relief or a.valleys
+                or a.site != "utsjoki"):
+            raise SystemExit("ложбины с подтверждением снимком объявлены для "
+                             "рабочего набора и площадки Утсйоки; ключи --рельеф, "
+                             "--ложбины, --перенос и --настройка0/1 несовместимы")
+        from experiments.openlin_relief_lines import load_dems, valley_response
+        # вход и отклик — как RELU2; подтверждение — две половины зимнего
+        # снимка (их собственный отклик), подделка — только рельефа (RELU3_*)
+        opt, _alos = load_dems(a.site, res_m)
+        resp_fn = valley_response
+        p_max, n_sh = RELU3_ALPHA, RELU3_SHIFT_N
+        n_total = RELU3_N_TESTS_PRIOR + RELU3_N_TESTS
+        tag = "_ложбины2"
     min_len = MIN_LEN_M
     a.clean = a.clean or a.clean1k
     if a.clean:
@@ -1499,6 +1553,9 @@ def main() -> None:
         p_max, n_sh = ALL_ALPHA, ALL_SHIFT_N
         n_total = ALL_N_TESTS_PRIOR + ALL_N_TESTS
         tag = sfx
+    # отклик для трассировки половин подтверждения: у RELU3 половины — снимок,
+    # и трассируются его собственным откликом, а не откликом ложбин
+    half_resp = None if a.valleys2 else resp_fn
     log(f"канал поиска: {a.channel}; порог значимости 0.05/{n_total} = "
         f"{p_max:.6f}, сдвигов {n_sh}")
     if sfx:
@@ -1534,7 +1591,7 @@ def main() -> None:
 
     # шов съёмки: граница смены числа сцен в ячейке плюс край данных
     cnt = w["count"][:valid.shape[0], :valid.shape[1]]
-    if a.relief or a.valleys:        # у модели рельефа швов сцен нет — только край
+    if a.relief or a.valleys or a.valleys2:   # у модели рельефа швов сцен нет — только край
         cnt = np.zeros(valid.shape, "int16")
     seam = np.zeros(valid.shape, bool)
     seam[:, :-1] |= cnt[:, :-1] != cnt[:, 1:]
@@ -1591,7 +1648,7 @@ def main() -> None:
         # пересчёт, Spearman +0.23...-0.61, а непрерывное поле переживает,
         # 0.61-0.99).
         dts = [distance_transform_edt(~mask_of(trace(h, valid, res_m, local=True,
-                                                     response_fn=resp_fn),
+                                                     response_fn=half_resp),
                                                valid.shape), sampling=(res_m, res_m))
                for h in (ho, hf)]
         A, C = select2(lo, zone, strike, dts)
@@ -1608,9 +1665,17 @@ def main() -> None:
                       (opt, halves["А"], halves["Б"])])
     fL, fA, fC, fAw, fCw, fLen = [], [], [], [], [], []
     for k in range(N_FAKES):
-        sg = surrogate(np.nan_to_num(stack), valid, np.random.default_rng(900 + k))
-        a_, c_, _d, nl_, aw_, cw_ = run(sg[0], sg[1], sg[2],
-                                        geom_fake if k == 0 else None)
+        if a.valleys2:
+            # подделывается только рельеф; половины снимка настоящие — связь
+            # «рельеф — снимок» рушится, спектр рельефа сохраняется (RELU3)
+            sg = surrogate(np.nan_to_num(stack[:1]), valid,
+                           np.random.default_rng(900 + k))
+            a_, c_, _d, nl_, aw_, cw_ = run(sg[0], halves["А"], halves["Б"],
+                                            geom_fake if k == 0 else None)
+        else:
+            sg = surrogate(np.nan_to_num(stack), valid, np.random.default_rng(900 + k))
+            a_, c_, _d, nl_, aw_, cw_ = run(sg[0], sg[1], sg[2],
+                                            geom_fake if k == 0 else None)
         fAw.append(len(aw_)); fCw.append(len(cw_))
         fLen += [x["длина_км"] for x in aw_]         # длины двойника после сшивки
         fL.append(nl_); fA.append(len(a_)); fC.append(len(c_))

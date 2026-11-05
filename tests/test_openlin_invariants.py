@@ -267,3 +267,120 @@ def test_tune1_incompatible_with_tune0_and_xfer(monkeypatch):
     for other in ("--настройка0", "--перенос"):
         with pytest.raises(SystemExit):
             _run_v3(monkeypatch, ["--site", "utsjoki", "--настройка1", other])
+
+
+# ---------------- линии по рельефу (05.11.2026) ----------------
+
+def _scarp_profile(n=300, step=20.0, rows=40):
+    """Логистический уступ высотой 30 м шириной ~40 м на x = 3000 м."""
+    x = np.arange(n) * step
+    z = 30.0 / (1.0 + np.exp(-(x - 3000.0) / 40.0))
+    return np.tile(z, (rows, 1)), step
+
+
+def _peaks(row):
+    return [i for i in range(1, len(row) - 1)
+            if row[i] > row[i - 1] and row[i] >= row[i + 1]
+            and row[i] > 0.05 * row.max()]
+
+
+def test_scarp_has_one_peak_ridge_has_more():
+    pytest.importorskip("skimage")
+    from experiments.openlin_iso import ridge_response
+    from experiments.openlin_relief_lines import scarp_response, slope
+    dem, step = _scarp_profile()
+    s = slope(dem, step)
+    mid = s.shape[0] // 2
+    ps = _peaks(scarp_response(s)[mid])
+    pr = _peaks(ridge_response(s)[mid])
+    assert len(ps) == 1 and abs(ps[0] - 150) <= 1, ps
+    assert len(pr) > 1, pr
+
+
+def test_slope_plane_and_nan():
+    from experiments.openlin_relief_lines import slope
+    yy, xx = np.mgrid[:30, :30].astype(float)
+    dem = 0.1 * 20.0 * xx                       # 0.1 м/м при шаге 20 м
+    s = slope(dem, 20.0)
+    assert np.allclose(s[2:-2, 2:-2], 0.1, atol=1e-5)
+    dem2 = dem.copy()
+    dem2[10, 10] = np.nan
+    s2 = slope(dem2, 20.0)
+    assert np.isnan(s2[10, 10])
+    assert np.isfinite(s2[20, 20])
+
+
+def test_relu1_alpha_and_reachability():
+    assert v3.RELU1_N_TESTS_PRIOR == 130
+    assert v3.RELU1_N_TESTS == 6
+    assert v3.RELU1_ALPHA == pytest.approx(0.05 / 136)
+    assert v3.RELU1_SHIFT_N == 6000
+    floor = 1.0 / (v3.RELU1_SHIFT_N + 1)
+    assert floor <= v3.RELU1_ALPHA / 2
+    assert v3.RELU1_ALPHA / floor >= 2
+
+
+def test_relief_key_only_for_utsjoki(monkeypatch):
+    for site in ("lapland", "anabar"):
+        with pytest.raises(SystemExit, match="слой по рельефу"):
+            _run_v3(monkeypatch, ["--site", site, "--рельеф"])
+
+
+def test_relief_incompatible_with_other_keys(monkeypatch):
+    for other in ("--настройка0", "--настройка1", "--перенос"):
+        with pytest.raises(SystemExit):
+            _run_v3(monkeypatch, ["--site", "utsjoki", "--рельеф", other])
+
+
+# ---------------- кэш половин сцен ----------------
+
+def _half_cache_setup(monkeypatch, tmp_path, cached_scenes):
+    from experiments import openlin_lowsun as ls
+    comp, sc = tmp_path / "comp", tmp_path / "scenes"
+    comp.mkdir()
+    sc.mkdir()
+    monkeypatch.setattr(v3, "COMP", comp)
+    monkeypatch.setattr(ls, "scene_cache", lambda site: sc)
+    rng = np.random.default_rng(1)
+    names = ["S2X_T35A_2026030%d_лист_20m.npz" % d for d in (1, 2)]
+    for nm in names:
+        np.savez(sc / nm, B04=(100 + 50 * rng.random((48, 48))).astype("float32"))
+    np.savez(comp / "winter_utsjoki_20m_лист.npz",
+             scenes=np.array([n.split("_лист")[0] for n in names]))
+    marker = np.full((48, 48), 7.0, "float32")
+    kw = {} if cached_scenes is None else {"scenes": np.array(cached_scenes)}
+    for h in ("А", "Б"):
+        np.savez(comp / f"winter_utsjoki_20m_лист_{h}.npz", shade=marker, **kw)
+    return names, marker
+
+
+def test_halves_cache_used_when_scenes_match(monkeypatch, tmp_path):
+    names, marker = _half_cache_setup(monkeypatch, tmp_path, None)
+    # tile T35A: сцена 1 -> «А», сцена 2 -> «Б»
+    comp = v3.COMP
+    for h, nm in (("А", names[0]), ("Б", names[1])):
+        np.savez(comp / f"winter_utsjoki_20m_лист_{h}.npz", shade=marker,
+                 scenes=np.array([nm]))
+    out = v3.build_halves("utsjoki", lambda *a: None)
+    assert np.all(out["А"] == 7.0) and np.all(out["Б"] == 7.0)
+
+
+def test_halves_cache_rebuilt_when_scenes_differ(monkeypatch, tmp_path):
+    pytest.importorskip("skimage")
+    _half_cache_setup(monkeypatch, tmp_path, ["чужая_сцена.npz"])
+    msgs = []
+    out = v3.build_halves("utsjoki", msgs.append)
+    assert any("пересборка" in m for m in msgs)
+    assert not np.all(out["А"] == 7.0)
+    z = np.load(v3.COMP / "winter_utsjoki_20m_лист_А.npz")
+    assert list(z["scenes"]) == ["S2X_T35A_20260301_лист_20m.npz"]
+
+
+def test_halves_cache_without_scenes_key_rebuilt_unless_anabar(monkeypatch, tmp_path):
+    _half_cache_setup(monkeypatch, tmp_path, None)
+    msgs = []
+    try:
+        v3.build_halves("utsjoki", msgs.append)
+    except Exception:
+        pass                                     # пересборка на крошечных данных
+    assert any("пересборка" in m for m in msgs)

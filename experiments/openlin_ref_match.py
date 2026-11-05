@@ -109,43 +109,261 @@ MAIN_MEASURE = "curve_score"   # главная; остальные — для �
 REF_MATCH_N_TESTS = 0          # p-проверок нет, в счётчик ничего не идёт
 # ---------------------------------------------------------------------------
 
-_TODO = "реализация — по объявлению в шапке модуля"
+# Реализация (05.11.2026, после коммита объявления 2a93ff3). Как считается
+# быстро и без новых чисел: для каждого положения эталона (на месте и на
+# каждом сдвиге) ищутся все пары «ячейка эталона — наша ячейка ближе TOL_M»
+# (cKDTree.sparse_distance_matrix), отбрасываются пары с разницей направлений
+# больше DIR_TOL_DEG, и для ячейки эталона запоминается НАИМЕНЬШИЙ ранг нашей
+# линии, которая её находит. Тогда R_k — доля ячеек, у которых этот ранг
+# меньше числа линий, вошедших в L_k: одна проходка на положение даёт всю
+# кривую. Это ровно определение из шапки, не приближение.
 
 
-def our_directions(mask: np.ndarray, res: float) -> np.ndarray:
+def _axial_diff(a, b):
+    d = np.abs(a - b) % 180.0
+    return np.minimum(d, 180.0 - d)
+
+
+def components(mask: np.ndarray):
+    from scipy.ndimage import label
+    return label(mask, structure=np.ones((3, 3), int))
+
+
+def our_directions(mask: np.ndarray, res: float, lab=None, n=None) -> np.ndarray:
     """Угол (градусы, [0, 180)) главной оси компоненты в круге DIR_WIN_M; NaN без оси."""
-    raise NotImplementedError(_TODO)
+    from scipy.ndimage import find_objects
+    from scipy.signal import fftconvolve
+
+    if lab is None:
+        lab, n = components(mask)
+    rad = int(round(DIR_WIN_M / res))
+    yy, xx = np.mgrid[-rad:rad + 1, -rad:rad + 1]
+    disk = ((yy ** 2 + xx ** 2) <= rad ** 2).astype("float64")
+    out = np.full(mask.shape, np.nan, dtype="float32")
+    H, W = mask.shape
+    for j, sl in enumerate(find_objects(lab), start=1):
+        if sl is None:
+            continue
+        r0, r1 = max(sl[0].start - rad, 0), min(sl[0].stop + rad, H)
+        c0, c1 = max(sl[1].start - rad, 0), min(sl[1].stop + rad, W)
+        m = (lab[r0:r1, c0:c1] == j).astype("float64")
+        rr, cc = np.mgrid[0:r1 - r0, 0:c1 - c0].astype("float64")
+        conv = lambda x: fftconvolve(x, disk, mode="same")
+        s0 = conv(m)
+        sr, sc = conv(m * rr), conv(m * cc)
+        srr, scc, src = conv(m * rr * rr), conv(m * cc * cc), conv(m * rr * cc)
+        own = m > 0
+        with np.errstate(invalid="ignore", divide="ignore"):
+            n0 = np.round(s0)
+            mr, mc = sr / s0, sc / s0
+            crr, ccc, crc = srr / s0 - mr ** 2, scc / s0 - mc ** 2, src / s0 - mr * mc
+            th = 0.5 * np.arctan2(2 * crc, crr - ccc)          # ось в (ряд, столбец)
+            az = np.degrees(np.arctan2(np.sin(th), -np.cos(th))) % 180.0
+        az = np.where(own & (n0 >= 2), az, np.nan)
+        blk = out[r0:r1, c0:c1]
+        blk[own] = az[own]
+    return out
 
 
-def ref_directions(layer: str, w: dict, shape) -> np.ndarray:
-    """Угол звена эталона на его ячейках растра (NaN вне линий)."""
-    raise NotImplementedError(_TODO)
+def ref_directions(layer: str, w: dict, shape) -> tuple[np.ndarray, np.ndarray]:
+    """Угол звена эталона на его ячейках растра (NaN вне линий) и номер линии."""
+    import geopandas as gpd
+    from rasterio.features import rasterize
+    from rasterio.transform import Affine
+    from shapely.geometry import LineString
+
+    from experiments.openlin_transfer_check import GTK
+
+    g = gpd.read_file(GTK / f"lin500k_{layer}.gpkg").to_crs(epsg=int(w["epsg"]))
+    res = float(w["res_m"])
+    tr = Affine(res, 0, float(w["x0"]), 0, -res, float(w["y_top"]))
+    segs, ids = [], []
+    for i, geom in enumerate(g.geometry):
+        if geom is None:
+            continue
+        for p in getattr(geom, "geoms", [geom]):
+            xy = np.asarray(p.coords)[:, :2]
+            for (xa, ya), (xb, yb) in zip(xy[:-1], xy[1:]):
+                az = float(np.degrees(np.arctan2(xb - xa, yb - ya)) % 180.0)
+                segs.append((LineString([(xa, ya), (xb, yb)]), az))
+                ids.append((LineString([(xa, ya), (xb, yb)]), i + 1))
+    ang = rasterize(segs, out_shape=shape, transform=tr, fill=np.nan,
+                    all_touched=True, dtype="float32")
+    fid = rasterize(ids, out_shape=shape, transform=tr, fill=0,
+                    all_touched=True, dtype="int32")
+    return ang, fid
 
 
 def shifts(shape, n: int = N_SHIFTS, seed: int = SEED) -> list:
     """Общий список сдвигов (dr, dc), поля min(200, H/8); строится один раз."""
-    raise NotImplementedError(_TODO)
+    H, W = shape
+    rng = np.random.default_rng(seed)
+    lo_r, lo_c = min(200, H // 8), min(200, W // 8)
+    return [(int(rng.integers(lo_r, H - lo_r)), int(rng.integers(lo_c, W - lo_c)))
+            for _ in range(n)]
 
 
-def recall_dir(ref_dir, our_dir, valid, shift_list) -> tuple:
-    """(направленная полнота, средняя по сдвигам полнота нуля)."""
-    raise NotImplementedError(_TODO)
+def rank_lines(mask: np.ndarray, res: float):
+    """Компоненты по убыванию длины (км), связи — по первой ячейке построчно.
+
+    Возвращает метки, ранг каждой метки (0 — самая длинная) и длины по рангу.
+    """
+    lab, n = components(mask)
+    size = np.bincount(lab.ravel(), minlength=n + 1)[1:]
+    first = np.full(n, np.iinfo(np.int64).max)
+    flat = lab.ravel()
+    nz = np.flatnonzero(flat)
+    np.minimum.at(first, flat[nz] - 1, nz)
+    order = np.lexsort((first, -size))                    # длина, затем первая ячейка
+    rank = np.empty(n, int)
+    rank[order] = np.arange(n)
+    return lab, n, rank, size[order] * res / 1000.0
 
 
-def rank_lines(mask: np.ndarray, res: float) -> list:
-    """Компоненты по убыванию длины (км), связи — по первой ячейке построчно."""
-    raise NotImplementedError(_TODO)
+def _min_rank(ref_rc, ref_ang, tree, our_ang, our_rank, res):
+    """Для каждой ячейки эталона — наименьший ранг нашей линии, которая её находит."""
+    from scipy.spatial import cKDTree
+
+    out = np.full(len(ref_rc), np.iinfo(np.int64).max)
+    if not len(ref_rc):
+        return out
+    t_ref = cKDTree(ref_rc * res)
+    pairs = t_ref.sparse_distance_matrix(tree, TOL_M, output_type="ndarray")
+    if not len(pairs):
+        return out
+    i, j = pairs["i"], pairs["j"]
+    ok = _axial_diff(ref_ang[i], our_ang[j]) <= DIR_TOL_DEG
+    np.minimum.at(out, i[ok], our_rank[j[ok]])
+    return out
 
 
-def curve_score(ranked, ref_dir, valid, shift_list, res: float, K: int) -> dict:
+def positions(ref_ang, fid, valid, shift_list):
+    """Ячейки эталона на месте и на каждом сдвиге (только в общих ячейках)."""
+    H, W = valid.shape
+    rr, cc = np.nonzero(np.isfinite(ref_ang))
+    a, f = ref_ang[rr, cc], fid[rr, cc]
+    out = []
+    for dr, dc in [(0, 0)] + list(shift_list):
+        r2, c2 = (rr + dr) % H, (cc + dc) % W
+        ok = valid[r2, c2]
+        out.append((np.stack([r2[ok], c2[ok]], 1), a[ok], f[ok]))
+    return out
+
+
+def evaluate(mask, pos, res):
+    """Для набора: длины по рангу и наименьший ранг у ячеек эталона на каждом положении."""
+    from scipy.spatial import cKDTree
+
+    lab, n, rank, lens = rank_lines(mask, res)
+    our_dir = our_directions(mask, res, lab, n)
+    rr, cc = np.nonzero(mask & np.isfinite(our_dir))
+    tree = cKDTree(np.stack([rr, cc], 1) * res)
+    our_ang = our_dir[rr, cc]
+    our_rank = rank[lab[rr, cc] - 1]
+    mins = [_min_rank(rc, ang, tree, our_ang, our_rank, res) for rc, ang, _f in pos]
+    return lens, mins
+
+
+def curve_score(lens, mins, K: int) -> dict:
     """Кривая R_k, N_k на L_k = k*LEN_STEP_KM и S = sum(R-N) / sum(1-N), k = 1..K."""
-    raise NotImplementedError(_TODO)
+    cum = np.cumsum(lens)
+    L = LEN_STEP_KM * np.arange(1, K + 1)
+    cut = np.searchsorted(cum, L, side="right")        # линий с суммой длины <= L
+    R = np.array([(mins[0] < c).mean() for c in cut])
+    N = np.array([np.mean([(m < c).mean() for m in mins[1:]]) for c in cut])
+    S = float((R - N).sum() / (1.0 - N).sum())
+    return dict(L=L, R=R, N=N, S=S)
 
 
-def long_lines(ref_dir, our_dir, valid, shift_list, res: float) -> dict:
+def recall_dir(mins) -> tuple:
+    """(направленная полнота всего набора, средняя по сдвигам полнота нуля)."""
+    big = np.iinfo(np.int64).max
+    return float((mins[0] < big).mean()), float(np.mean([(m < big).mean() for m in mins[1:]]))
+
+
+def long_lines(mins, pos, res: float) -> dict:
     """Доля линий эталона длиннее REF_LONG_KM с >= LINE_FRAC направленно найденной длины."""
-    raise NotImplementedError(_TODO)
+    big = np.iinfo(np.int64).max
+
+    def share(m, f, long_ids):
+        found = np.bincount(f, weights=(m < big), minlength=long_ids.size)
+        total = np.bincount(f, minlength=long_ids.size)
+        sel = long_ids[:len(total)] & (total > 0)
+        return float((found[sel] / total[sel] >= LINE_FRAC).mean()) if sel.any() else np.nan
+
+    f0 = pos[0][2]
+    length = np.bincount(f0) * res / 1000.0
+    long_ids = length >= REF_LONG_KM
+    obs = share(mins[0], f0, long_ids)
+    null = float(np.nanmean([share(m, p[2], long_ids) for m, p in zip(mins[1:], pos[1:])]))
+    return dict(n_long=int(long_ids.sum()), obs=obs, null=null,
+                adj=(obs - null) / (1 - null) if null < 1 else np.nan)
 
 
 def main() -> None:
-    raise NotImplementedError(_TODO)
+    import argparse
+
+    from experiments.openlin_transfer_check import COMP, M, MAIN_LAYER
+    from experiments.openlin_union_recall import add_new
+
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--site", default="utsjoki")
+    a = ap.parse_args()
+    if a.site != "utsjoki":
+        raise SystemExit("сравнение методов — на площадке настройки; контроль — "
+                         "отдельным объявлением")
+
+    w = dict(np.load(COMP / f"winter_{a.site}_20m_лист.npz"))
+    o = np.load(M / f"openlin_zone_lines_{a.site}_v3_настройка1.npz")
+    r = np.load(M / f"openlin_zone_lines_{a.site}_v3_рельеф1.npz")
+    res = float(w["res_m"])
+    shape = o["C_all"].shape
+    valid = np.isfinite(w["shade"][:shape[0], :shape[1]])
+    ang, fid = ref_directions(MAIN_LAYER, w, shape)
+    ang = np.where(valid, ang, np.nan)
+    sh = shifts(shape)
+    pos = positions(ang, fid, valid, sh)
+    print(f"площадка {a.site}: эталон {MAIN_LAYER}, ячеек {len(pos[0][0])}; допуск "
+          f"{TOL_M:.0f} м и {DIR_TOL_DEG:.0f}°, окно направления {DIR_WIN_M:.0f} м, "
+          f"шаг L {LEN_STEP_KM:.0f} км, сдвигов {len(sh)} (зерно {SEED})", flush=True)
+
+    rows, res_by = [], {}
+    for fam, key in (("весь лист", "C_all"), ("в зонах", "C")):
+        om, rm = o[key][:shape[0], :shape[1]], r[key][:shape[0], :shape[1]]
+        sets = {"снимок": om, "рельеф": rm, "снимок + рельеф": om | add_new(rm, om, res)}
+        ev = {}
+        for s, m in sets.items():
+            ev[s] = evaluate(m, pos, res)
+            print(f"  [{fam}] {s}: посчитано", flush=True)
+        K = int(np.floor(min(lens.sum() for lens, _m in ev.values()) / LEN_STEP_KM))
+        print(f"\nсемейство «{fam}»: K = {K} (L до {K * LEN_STEP_KM:.0f} км)")
+        for s, (lens, mins) in ev.items():
+            cs = curve_score(lens, mins, K)
+            rd, rn = recall_dir(mins)
+            ll = long_lines(mins, pos, res)
+            res_by[(fam, s)] = (lens, mins)
+            print(f"  {s:16s} {lens.sum():6.0f} км | ГЛАВНАЯ S = {cs['S']:.3f} | "
+                  f"при L = {K * LEN_STEP_KM:.0f} км: {100 * cs['R'][-1]:.1f} % "
+                  f"(нуль {100 * cs['N'][-1]:.1f}) | весь набор, направленно: "
+                  f"{100 * rd:.1f} % (нуль {100 * rn:.1f}) | линий эталона "
+                  f">= {REF_LONG_KM:.0f} км найдено: {100 * ll['obs']:.0f} % из {ll['n_long']} "
+                  f"(нуль {100 * ll['null']:.0f} %)")
+            rows.append(dict(семейство=fam, набор=s, км=lens.sum(), K=K, S=cs["S"],
+                             R_K=cs["R"][-1], N_K=cs["N"][-1], полнота_напр=rd,
+                             нуль_напр=rn, линий_длинных=ll["n_long"],
+                             найдено_линий=ll["obs"], нуль_линий=ll["null"]))
+    print("\nпары «в зонах / весь лист» одного метода (K по более короткому):")
+    for s in ("снимок", "рельеф", "снимок + рельеф"):
+        lz, mz = res_by[("в зонах", s)]
+        la, ma = res_by[("весь лист", s)]
+        K = int(np.floor(min(lz.sum(), la.sum()) / LEN_STEP_KM))
+        print(f"  {s:16s} K = {K}: S в зонах {curve_score(lz, mz, K)['S']:.3f}, "
+              f"весь лист {curve_score(la, ma, K)['S']:.3f}")
+    import pandas as pd
+    out = M / f"openlin_ref_match_{a.site}.csv"
+    pd.DataFrame(rows).to_csv(out, index=False, encoding="utf-8-sig")
+    print(f"\nсохранено: {out}")
+
+
+if __name__ == "__main__":
+    main()

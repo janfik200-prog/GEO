@@ -318,8 +318,15 @@ def main() -> None:
     r = np.load(M / f"openlin_zone_lines_{a.site}_v3_рельеф1.npz")
     # RELU2 (ложбины, объявление 05.11.2026): если прогон есть, в сравнение
     # входят ещё «ложбины» и «снимок + рельеф + ложбины» (то же правило сложения)
-    pv = M / f"openlin_zone_lines_{a.site}_v3_ложбины1.npz"
+    # RELU3 (ложбины с подтверждением снимком) заменяет RELU2, если есть
+    # RELU4 (подтверждение радаром) — первым, если есть
+    for t in ("_ложбины3", "_ложбины2", "_ложбины1"):
+        pv = M / f"openlin_zone_lines_{a.site}_v3{t}.npz"
+        if pv.exists():
+            break
     v = np.load(pv) if pv.exists() else None
+    if v is not None:
+        print(f"ложбины — {pv.name}")
     res = float(w["res_m"])
     shape = o["C_all"].shape
     valid = np.isfinite(w["shade"][:shape[0], :shape[1]])

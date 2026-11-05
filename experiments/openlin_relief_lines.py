@@ -48,6 +48,35 @@ def load_slopes(site: str, res_m: float) -> tuple[np.ndarray, np.ndarray]:
 ALOS_BAD_M = 30.0
 
 
+def load_dems(site: str, res_m: float) -> tuple[np.ndarray, np.ndarray]:
+    """Высота GLO-30 (строит) и ALOS (подтверждает) на сетке листа, без ям ALOS."""
+    g = np.load(ANABAR_DEM / f"dem_glo30_{site}_лист_{int(res_m)}m.npy")
+    a = np.load(ANABAR_DEM / f"dem_alos_{site}_лист_{int(res_m)}m.npy")
+    return g, np.where(np.abs(a - g) > ALOS_BAD_M, np.nan, a)
+
+
+def valley_response(img: np.ndarray, sigmas: tuple = SIGMAS) -> np.ndarray:
+    """Оси ложбин: линейность по гессиану только там, где наибольшая кривизна положительна.
+
+    Поверхность поперёк линии вогнута — дно ложбины (RELU2, 05.11.2026: под
+    найденной частью эталона GTK рельеф — ложбина в 79 % мест). Это гребни
+    перевёрнутого рельефа; масштаб ядра — те же SIGMAS, под эталон не
+    подбирается.
+    """
+    from skimage.feature import hessian_matrix, hessian_matrix_eigvals
+
+    best = np.zeros(img.shape, dtype="float32")
+    for s in sigmas:
+        h = hessian_matrix(img, sigma=s, order="rc", use_gaussian_derivatives=True)
+        l1, l2 = hessian_matrix_eigvals(h)
+        dom = np.where(np.abs(l1) >= np.abs(l2), l1, l2)
+        big = np.maximum(np.abs(l1), np.abs(l2))
+        small = np.minimum(np.abs(l1), np.abs(l2))
+        r = np.where(dom > 0, s ** 2 * (big - small), 0.0)
+        best = np.maximum(best, r.astype("float32"))
+    return best
+
+
 def scarp_response(img: np.ndarray, sigmas: tuple = SIGMAS) -> np.ndarray:
     """Гребни поля уклона: та же линейность, что ridge_response, но только знак «гребень».
 

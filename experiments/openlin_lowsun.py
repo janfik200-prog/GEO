@@ -128,8 +128,23 @@ def find_scenes(grid, log, min_cover: float = MIN_COVER,
     return out
 
 
-def fetch(items, grid, log, n_max: int = 4, tag: str = "фраг") -> dict:
-    """Скачать выбранные сцены на сетку фрагмента."""
+def scene_cache(site: str) -> Path:
+    """Папка кэша сцен площадки.
+
+    Имя файла сцены — номер сцены, тег и шаг, без сетки. Пока площадка была
+    одна, этого хватало; но у соседних площадок одни и те же сцены (плитки
+    T35WMS/WNS у Лапландии и Утсйоки), и 05.11.2026 зимний композит Утсйоки
+    взял из кэша 5 сцен, вырезанных по сетке Лапландии (найдено аудитом UTS0).
+    Поэтому у каждой площадки, кроме Анабара, своя подпапка; анабарский кэш
+    остаётся в корне, как был, — его прогоны опубликованы и пересобирать их
+    незачем.
+    """
+    return CACHE if site == "anabar" else CACHE / site
+
+
+def fetch(items, grid, log, n_max: int = 4, tag: str = "фраг",
+          cache_dir: Path = CACHE) -> dict:
+    """Скачать выбранные сцены на сетку фрагмента (кэш — ``cache_dir``)."""
     import os
 
     from rasterio.enums import Resampling
@@ -138,7 +153,7 @@ def fetch(items, grid, log, n_max: int = 4, tag: str = "фраг") -> dict:
 
     os.environ.setdefault("GDAL_HTTP_TIMEOUT", "60")
     os.environ.setdefault("GDAL_HTTP_MAX_RETRY", "3")
-    CACHE.mkdir(parents=True, exist_ok=True)
+    cache_dir.mkdir(parents=True, exist_ok=True)
 
     # Азимут освещения на этой широте почти не гуляет: низкое солнце бывает
     # только около полудня, и все сцены сняты с юга (177-190°). Поэтому
@@ -158,7 +173,7 @@ def fetch(items, grid, log, n_max: int = 4, tag: str = "фраг") -> dict:
     out = {}
     for sun, az, it in picked:
         key = f"{it.id}"
-        path = CACHE / f"{key}_{tag}_{int(grid.res_m)}m.npz"
+        path = cache_dir / f"{key}_{tag}_{int(grid.res_m)}m.npz"
         if path.exists():
             out[key] = dict(np.load(path)) | {"sun": sun, "az": az}
             log(f"  {it.datetime:%Y-%m-%d} солнце {sun:.1f}°, азимут "

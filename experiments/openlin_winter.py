@@ -316,7 +316,8 @@ def main() -> None:
         if not items:
             raise SystemExit("подходящих сцен нет")
     got = fetch(items, grid, log, a.scenes,
-                tag=("лист" if a.full else "фраг") + a.tag)
+                tag=("лист" if a.full else "фраг") + a.tag,
+                cache_dir=openlin_lowsun.scene_cache(a.site))
     if not got:
         raise SystemExit("ничего не скачалось")
 

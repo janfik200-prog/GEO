@@ -191,3 +191,79 @@ def test_trace_is_azimuth_neutral(theta):
     assert diff < 2.0, f"азимут {theta}: получен {best['азимут']:.1f}"
     expected_km = n * res / 1000 * (1.0 if theta % 90 == 0 else 2 ** 0.5)
     assert best["длина_км"] >= 0.7 * expected_km
+
+
+# ---------------- кэш сцен по площадкам (аудит 05.11.2026) ----------------
+
+def test_scene_cache_separate_per_site():
+    """Утсйоки брал из общего кэша 5 сцен, вырезанных по сетке Лапландии."""
+    from experiments import openlin_lowsun as ls
+    a, l, u = (ls.scene_cache(s) for s in ("anabar", "lapland", "utsjoki"))
+    assert len({a, l, u}) == 3
+    assert a == ls.CACHE
+    assert "lapland" in l.parts and "utsjoki" in u.parts
+    assert l != ls.CACHE and u != ls.CACHE
+
+
+def _fake_item_and_grid():
+    from datetime import datetime
+    from types import SimpleNamespace as NS
+    item = NS(id="S2X_TEST", datetime=datetime(2026, 3, 1, 12),
+              assets={"B04": NS(href="b04"), "B08": NS(href="b08")})
+    return [(10.0, 180.0, item)], NS(res_m=20.0)
+
+
+def test_fetch_writes_to_cache_dir_and_not_shared(monkeypatch, tmp_path):
+    pytest.importorskip("rasterio")
+    from experiments import openlin_lowsun as ls
+    from experiments import openlin_probe
+    monkeypatch.setattr(openlin_probe, "_read_on_grid",
+                        lambda href, grid, rs: np.ones((3, 3), "float32"))
+    items, grid = _fake_item_and_grid()
+    msgs = []
+    d1, d2 = tmp_path / "a", tmp_path / "b"
+    shared_before = set(ls.CACHE.glob("S2X_TEST*")) if ls.CACHE.exists() else set()
+    ls.fetch(items, grid, msgs.append, cache_dir=d1)
+    assert len(list(d1.glob("S2X_TEST_*_20m.npz"))) == 1
+    shared_after = set(ls.CACHE.glob("S2X_TEST*")) if ls.CACHE.exists() else set()
+    assert shared_after == shared_before            # в общий CACHE не писали
+    assert not any("из кэша" in m for m in msgs)
+    msgs.clear()
+    ls.fetch(items, grid, msgs.append, cache_dir=d2)  # другая папка: не «из кэша»
+    assert not any("из кэша" in m for m in msgs)
+    assert len(list(d2.glob("S2X_TEST_*_20m.npz"))) == 1
+    msgs.clear()
+    ls.fetch(items, grid, msgs.append, cache_dir=d1)  # та же папка: из кэша
+    assert any("из кэша" in m for m in msgs)
+
+
+def test_callers_use_scene_cache():
+    import inspect
+    from experiments import openlin_winter as w
+    assert "scene_cache" in inspect.getsource(w.main)
+    assert "cache_dir=" in inspect.getsource(w.main)
+    assert "scene_cache(site)" in inspect.getsource(v3.build_halves)
+
+
+# ---------------- UTS1 ----------------
+
+def test_uts1_chain_and_alpha_and_reachability():
+    assert v3.UTS1_N_TESTS_PRIOR == v3.UTS0_N_TESTS_PRIOR + v3.UTS0_N_TESTS == 124
+    assert v3.UTS1_N_TESTS == 6
+    assert v3.UTS1_ALPHA == pytest.approx(0.05 / 130)
+    assert v3.UTS1_SHIFT_N == 6000
+    assert 1.0 / (v3.UTS1_SHIFT_N + 1) <= v3.UTS1_ALPHA / 2
+
+
+def test_tune1_key_only_for_utsjoki(monkeypatch):
+    for site in ("lapland", "anabar"):
+        with pytest.raises(SystemExit, match="повтор базового"):
+            _run_v3(monkeypatch, ["--site", site, "--настройка1"])
+    with pytest.raises(RuntimeError, match="дошли"):
+        _run_v3(monkeypatch, ["--site", "utsjoki", "--настройка1"])
+
+
+def test_tune1_incompatible_with_tune0_and_xfer(monkeypatch):
+    for other in ("--настройка0", "--перенос"):
+        with pytest.raises(SystemExit):
+            _run_v3(monkeypatch, ["--site", "utsjoki", "--настройка1", other])

@@ -82,6 +82,26 @@ SITES: dict[str, Site] = {
                 Path("data/Gis-integro/shp_dbf/glub_r_nw.shp")),
         fault_query=None, epsg=32647,
         comment="Анабарский щит, лист R-48-XI,XII; зоны разломов ГИС Интегро"),
+    # Площадка переноса ветки линеаментов (24.10.2026). Эталон — линеаменты
+    # GTK 1:500 000, слой по рельефу LiDAR (Engström et al. 2025, NJG 105;
+    # слой 292 службы gtkdata.gtk.fi). Центр — квадрат TILE_KM с наибольшей
+    # длиной этих линий в Финляндии (1894 км; перебор центров через 20 км).
+    # «faults» здесь — только для сверки после, во вход не идёт.
+    "lapland": Site(
+        name="lapland", lat=68.639, lon=26.989,
+        faults=Path("datacache/gtk_lineaments/lin500k_292.gpkg"),
+        fault_query=None, epsg=32635,
+        comment="Лапландия, Фенноскандинавский щит; линеаменты GTK 1:500k (LiDAR)"),
+    # Площадка НАСТРОЙКИ ветки линеаментов (05.11.2026): здесь тракт можно
+    # менять, Лапландия остаётся контролем. Выбрана по покрову, а не по длине
+    # эталона (openlin_site_scan): ближайший к Анабару квадрат Финляндии, не
+    # задевающий Лапландию, — лес 21 % (Анабар 3 %, Лапландия 76 %), GTK 292
+    # внутри 1119 км. Эталон тот же слой 292, во вход не идёт.
+    "utsjoki": Site(
+        name="utsjoki", lat=69.551, lon=27.142,
+        faults=Path("datacache/gtk_lineaments/lin500k_292.gpkg"),
+        fault_query=None, epsg=32635,
+        comment="Утсйоки, Фенноскандинавский щит, тундра; линеаменты GTK 1:500k (LiDAR)"),
 }
 
 # --------------------------------------------------------------------------
@@ -167,6 +187,13 @@ def _read_on_grid(href: str, grid: Grid, resampling) -> np.ndarray:
     from rasterio.crs import CRS as RCRS
     from rasterio.vrt import WarpedVRT
 
+    if "blob.core.windows.net" in href:
+        # Подпись Planetary Computer живёт около часа, а на медленной сети
+        # (Лапландия, 25.10.2026: VV качался 45 мин) список сцен, подписанный
+        # при поиске, к концу протухает — и весь VH отпал с отказом. Подпись
+        # обновляется перед каждым чтением; pc.sign держит токен в кэше.
+        import planetary_computer as pc
+        href = pc.sign(href.split("?")[0])
     with rasterio.open(href) as src:
         with WarpedVRT(src, crs=RCRS.from_epsg(grid.epsg),
                        transform=grid.transform, height=grid.height,
@@ -402,7 +429,11 @@ def fault_distance(grid: Grid, site: Site, log) -> tuple[np.ndarray, int]:
             g = g.set_crs(_read_pj4(shp))
         if site.fault_query is None:
             # Слой целиком разломный: границы полигонов зон и есть цель сверки.
-            parts.append(g.to_crs(f"EPSG:{site.epsg}").boundary)
+            # Линейный слой (линеаменты GTK) берётся как есть: граница линии —
+            # это её два конца, а не сама линия.
+            gg = g.to_crs(f"EPSG:{site.epsg}")
+            lines = gg.geom_type.isin(["LineString", "MultiLineString"]).all()
+            parts.append(gg.geometry if lines else gg.boundary)
             log(f"  {shp.name}: {len(g)} объектов, взяты целиком (границы зон)")
             continue
         col = site.fault_query

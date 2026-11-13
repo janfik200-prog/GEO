@@ -34,6 +34,9 @@
     python -X utf8 -m experiments.gmo_knowledge_map_v0
     python -X utf8 -m experiments.gmo_knowledge_map_v0 --чистые-линеаменты   # v0.2
     python -X utf8 -m experiments.gmo_knowledge_map_v0 --вариант-б           # v0.2, вариант Б
+    python -X utf8 -m experiments.gmo_knowledge_map_v0 --чистые-линеаменты --сохранность
+
+Ключ --сохранность добавляет звено С (`preservation`, выход с суффиксом `_s`).
 
 Вариант Б — v0.2 плюс слои формулы ⚠ (`FORMULA`); с картой ВНИГНИ не
 сверяется (Ог2), выход `knowledge_map_v0_2_b.parquet`.
@@ -118,6 +121,22 @@ FORMULA = {
 }
 VARIANT = "А"
 
+#: Звено «С сохранность» (ключ --сохранность). Этап IV — по литературе
+#: (`Этап-IV-послерифейская-история-черновик.md`), критерии К28а, К28б, К29а
+#: черновика модели (разд. 5). С — фильтр площади (разд. 6, п. 3): в мягкое
+#: «и» не входит, итог не меняет; умножает уверенность. Числа ниже — наше
+#: предложение, ждут ответа ВНИГНИ на вопрос по О16 («где золото сохраннее»).
+#: * К28а уровень среза, ◇ «срез вскрыл нижний рифей, но не снял его»:
+#:   архей — 0 (рифей снят), рифей — от 1 (ильинская) до 0.5 (юсмастахская);
+#: * К28б близость к эрозионному краю рифея (контакт с археем), ◇ «узкая
+#:   полоса со стороны рифея»: exp(−d / R_EDGE) по рифею, 0 по архею;
+#: * К29а ячейка под кембрием — рифей сохранён, но не виден: С не наблюдается
+#:   (снижает уверенность через долю наблюдённых звеньев, оценку не трогает).
+#: Под четвертичным чехлом (нет преобладающего коренного подразделения) С
+#: тоже не наблюдается.
+PRESERVE = False
+R_EDGE_M = 5000.0
+
 
 def load() -> pd.DataFrame:
     feats = sorted({f for objs in MODEL.values() for crits in objs.values()
@@ -188,6 +207,45 @@ def soft_and(sc: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
     return np.exp(logm.mean(axis=1)), obs.sum(axis=1) / sc.shape[1]
 
 
+def preservation(df: pd.DataFrame) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """Звено С: оценка, ведущий объект и множитель уверенности.
+
+    Множитель определён и там, где С не наблюдается, иначе закрытые ячейки
+    вышли бы увереннее открытых соседей: под кембрием он считается по уровню
+    кембрия (рифей сохранён, но глубоко), под четвертичным чехлом берётся у
+    ближайшей ячейки с коренным подразделением.
+    """
+    from scipy.ndimage import distance_transform_edt
+    from experiments import gmo_h2_h7_checks as h27
+    unit = h27.main_unit(df)
+    lev = unit.map(h27.LEVEL)
+    arch, camb = lev == 0, lev == 7
+    riph = lev.between(1, 7)          # кембрий считается, но ниже снимается как «не виден»
+    k28a = pd.Series(np.nan, index=df.index)
+    k28a[arch] = 0.0
+    k28a[riph] = 1.0 - (lev[riph] - 1) / 10.0
+    # Расстояние от ячейки рифея до ближайшей ячейки архея, по сетке 500 м
+    nrow, ncol = int(df.row.max()) + 1, int(df.col.max()) + 1
+    grid = np.ones((nrow, ncol), bool)
+    grid[df.row[arch], df.col[arch]] = False
+    d = distance_transform_edt(grid) * 500.0
+    k28b = pd.Series(np.nan, index=df.index)
+    k28b[arch] = 0.0
+    k28b[riph] = np.exp(-d[df.row[riph], df.col[riph]] / R_EDGE_M)
+    s = pd.concat([k28a, k28b], axis=1).mean(axis=1)
+    known = np.zeros((nrow, ncol), bool)
+    known[df.row[s.notna()], df.col[s.notna()]] = True
+    filled = np.zeros((nrow, ncol))
+    filled[df.row, df.col] = s.fillna(0.0)
+    ir, ic = distance_transform_edt(~known, return_distances=False, return_indices=True)
+    mult = pd.Series(filled[ir, ic][df.row, df.col], index=df.index)
+    s[camb] = np.nan                                     # К29а: не виден
+    lead = pd.Series(None, index=df.index, dtype=object)
+    lead[s.notna()] = "О16в эрозионный срез"
+    lead[camb] = "О16а под кембрием (не наблюдается)"
+    return s, lead, mult
+
+
 def build(df: pd.DataFrame) -> pd.DataFrame:
     links_with_fault = [l for l, o in MODEL.items() if FAULT in o]
     best = None
@@ -202,6 +260,12 @@ def build(df: pd.DataFrame) -> pd.DataFrame:
         else:
             better = cand.итог > best.итог
             best[better] = cand[better]
+    if PRESERVE:
+        s, lead, mult = preservation(df)
+        best["звено С сохранность"], best["объект С сохранность"] = s, lead
+        links = [f"звено {l}" for l in MODEL]
+        observed = best[links].notna().sum(axis=1) / len(links)
+        best["уверенность"] = observed * mult
     return pd.concat([df[["row", "col", "x", "y", "dist_thalweg"]], best], axis=1)
 
 
@@ -257,8 +321,11 @@ def explain(m: pd.DataFrame, n: int = 3) -> None:
 
 def draw(m: pd.DataFrame) -> None:
     nrow, ncol = int(m.row.max()) + 1, int(m.col.max()) + 1
-    panels = [f"звено {l}" for l in MODEL if l != "С сохранность"] + ["итог", "уверенность"]
-    fig, axs = plt.subplots(2, 3, figsize=(15, 9.5))
+    panels = ([f"звено {l}" for l in MODEL if PRESERVE or l != "С сохранность"]
+              + ["итог", "уверенность"])
+    fig, axs = plt.subplots(2, 4, figsize=(20, 9.5)) if PRESERVE else plt.subplots(2, 3, figsize=(15, 9.5))
+    for ax in axs.ravel()[len(panels):]:
+        ax.axis("off")
     for ax, col in zip(axs.ravel(), panels):
         a = np.full((nrow, ncol), np.nan)
         a[m.row, m.col] = m[col]
@@ -270,7 +337,8 @@ def draw(m: pd.DataFrame) -> None:
     ver = TAG.lstrip("_").replace("_", ".")
     kind = "А (свои каналы)" if VARIANT == "А" else "Б (свои каналы и слои формулы ⚠)"
     fig.suptitle(f"Пробная карта на знаниях {ver}, вариант {kind}, лист R-48-XI,XII, "
-                 "сетка 500 м. Звено «сохранность» не наблюдается", fontsize=11)
+                 "сетка 500 м. " + ("Сохранность — фильтр: умножает уверенность, итог не меняет"
+                                   if PRESERVE else "Звено «сохранность» не наблюдается"), fontsize=11)
     fig.tight_layout()
     out = outputs.png(f"gmo_knowledge_map{TAG}.png")
     mapstyle.save_fig(fig, out, dpi=130)
@@ -282,7 +350,8 @@ def main() -> None:
     # накопления», и карта повторяла современную речную сеть (Г6: палеорельеф
     # не наблюдается; пробы по рыхлым отбирают в долинах — совпадение с ними
     # ложное).
-    global TAG, CLEAN, VARIANT
+    global TAG, CLEAN, VARIANT, PRESERVE
+    PRESERVE = "--сохранность" in sys.argv
     b = "--вариант-б" in sys.argv
     if "--без-долин" in sys.argv or "--чистые-линеаменты" in sys.argv or b:
         del MODEL["Н место накопления"]["О14 впадины"]
@@ -295,6 +364,8 @@ def main() -> None:
         VARIANT, TAG = "Б", "_v0_2_b"
         for (link, obj, crit), fl in FORMULA.items():
             MODEL[link].setdefault(obj, {}).setdefault(crit, []).extend(fl)
+    if PRESERVE:
+        TAG += "_s"
     df = load()
     m = build(df)
     m.to_parquet(OUT.with_name(f"knowledge_map{TAG}.parquet"), index=False)
@@ -302,7 +373,7 @@ def main() -> None:
     for l in MODEL:
         s = m[f"звено {l}"]
         print(f"   звено {l}: наблюдается в {s.notna().mean():.0%} ячеек")
-    print(f"   уверенность: {m.уверенность.value_counts().sort_index().round(2).to_dict()}")
+    print(f"   уверенность: {m.уверенность.round(1).value_counts().sort_index().to_dict()}")
     print("   разломная зона закрыла:", m.разлом_закрыл.value_counts().to_dict())
     print("   ведущий объект места накопления:",
           m["объект Н место накопления"].value_counts().to_dict())

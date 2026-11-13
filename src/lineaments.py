@@ -113,8 +113,20 @@ def density_raster(segments, shape) -> np.ndarray:
     return _draw(segments, shape)[0]
 
 
-def line_rasters(segments, shape, res_m: float | None = None) -> dict[str, np.ndarray]:
-    """Растры линеаментов: длина, узлы, расстояние, ориентация."""
+def line_rasters(segments, shape, res_m: float | None = None,
+                 exact_nodes: bool = False) -> dict[str, np.ndarray]:
+    """Растры линеаментов: длина, узлы, расстояние, ориентация.
+
+    ``exact_nodes`` (по умолчанию выключено, чтобы прежние выходы, в том числе
+    ``dataset_v5_rebuilt.parquet``, не менялись): ``uniform_filter`` считает
+    скользящую сумму вычитанием и оставляет в строке после каждой линии хвост
+    остатка округления ±1e-17. В ``node_dens`` это даёт 52% отрицательных и 3%
+    положительных «почти нулей» вместо честного нуля, а любая свёртка по рангу
+    превращает их в горизонтальные полосы (найдено 13.11.2026,
+    ``experiments/gmo_lineaments_background.py``). При ``True`` сглаженный счёт
+    округляется до кратного 1/25 — это точное значение среднего по окну 5x5
+    из целых счётов пикселей.
+    """
     from scipy.ndimage import distance_transform_edt, uniform_filter
 
     res_m = res_m or config.TER_RES_M
@@ -126,7 +138,8 @@ def line_rasters(segments, shape, res_m: float | None = None) -> dict[str, np.nd
     per_class = []
     for c in np.unique(cls):
         sub = [s for s, k in zip(segments, cls) if k == c]
-        per_class.append(uniform_filter(_draw(sub, shape)[0], size=5))
+        sm = uniform_filter(_draw(sub, shape)[0], size=5)
+        per_class.append(np.round(sm * 25.0) / 25.0 if exact_nodes else sm)
     nodes = np.zeros(shape)
     for i in range(len(per_class)):
         for j in range(i + 1, len(per_class)):
@@ -198,6 +211,41 @@ def rasters_to_cell_features(meta: integro_grid.GridMeta, r: dict[str, np.ndarra
         f"{prefix}dir_cos": np.nan_to_num(dir_c, nan=0.0).ravel(),
     }
     return pd.DataFrame(out)
+
+
+def coherence_cells(meta: integro_grid.GridMeta, r: dict[str, np.ndarray],
+                    res_m: float | None = None, pad: int = 0,
+                    win_cells: int = 5, min_px: int = 20) -> np.ndarray:
+    """Согласованность направлений линий в окне ``win_cells`` x ``win_cells`` ячеек.
+
+    Замена ``aniso_r`` из :func:`rasters_to_cell_features` (тот остаётся как
+    был). У прежнего канала два дефекта: ячейка с одной-единственной линией
+    получает 1 («все линии параллельны» по построению — 11% ячеек листа), а
+    ячейка без линий — 0, то есть «хаос», хотя направлений там просто нет
+    (75% ячеек). Здесь суммы sin 2a, cos 2a и длины берутся по окну (по
+    умолчанию 2.5 км — масштаб складки, а не ячейки), согласованность =
+    |Σ(sin, cos)| / Σдлины, и там, где в окне меньше ``min_px`` пикселей линий
+    (по умолчанию 2 км), канал не определён (NaN), а не ноль.
+
+    Возвращает плоский массив по ячейкам сетки (C-порядок).
+    """
+    from scipy.ndimage import uniform_filter
+
+    res_m = res_m or config.TER_RES_M
+    k = int(round(meta.dx / res_m))
+
+    def cell_sum(a):
+        core = a[pad:pad + meta.prf * k, pad:pad + meta.pic * k]
+        return core.reshape(meta.prf, k, meta.pic, k).sum(axis=(1, 3))
+
+    w = win_cells * win_cells
+    # Счёт целый, sin/cos — нет; окно считается как среднее x площадь окна.
+    n = np.round(uniform_filter(cell_sum(r["length"]), size=win_cells, mode="constant") * w)
+    s2 = uniform_filter(cell_sum(r["s2"]), size=win_cells, mode="constant") * w
+    c2 = uniform_filter(cell_sum(r["c2"]), size=win_cells, mode="constant") * w
+    with np.errstate(invalid="ignore", divide="ignore"):
+        coh = np.clip(np.hypot(s2, c2) / n, 0.0, 1.0)
+    return np.where(n >= min_px, coh, np.nan).ravel()
 
 
 def lineament_features(meta: integro_grid.GridMeta,

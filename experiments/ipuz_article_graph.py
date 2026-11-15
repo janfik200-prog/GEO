@@ -90,8 +90,12 @@ def формула(doc: Document, текст: str, номер: str) -> None:
     pf = p.paragraph_format
     pf.first_line_indent = Cm(0)
     pf.space_before, pf.space_after = Pt(6), Pt(6)
-    pf.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    # Выключка слева с табуляторами: центрирующий — по середине полосы
+    # набора, правый — у правого поля. Выключку по центру табулятор ломает.
+    pf.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    pf.tab_stops.add_tab_stop(Cm(8.25), WD_TAB_ALIGNMENT.CENTER)
     pf.tab_stops.add_tab_stop(Cm(16.5), WD_TAB_ALIGNMENT.RIGHT)
+    p.add_run("\t")
     p.add_run(текст).italic = True
     p.add_run("\t(%s)" % номер)
 

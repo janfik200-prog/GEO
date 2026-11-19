@@ -39,9 +39,26 @@ _RUNS = [
      v3.CLEAN1K_SHIFT_N, 98),
     ("XFER", v3.XFER_N_TESTS_PRIOR, v3.XFER_N_TESTS, v3.XFER_ALPHA,
      v3.XFER_SHIFT_N, 104),
+    ("XFER2", v3.XFER2_N_TESTS_PRIOR, v3.XFER2_N_TESTS, v3.XFER2_ALPHA,
+     v3.XFER2_SHIFT_N, 118),
+    # UTS0 и дальше — после перенумерации 05.11.2026 (сведение двух компьютеров:
+    # место 118 -> 124 занял XFER2, всё после него сдвинуто на +6)
     ("UTS0", v3.UTS0_N_TESTS_PRIOR, v3.UTS0_N_TESTS, v3.UTS0_ALPHA,
-     v3.UTS0_SHIFT_N, 118),
+     v3.UTS0_SHIFT_N, 124),
+    ("UTS1", v3.UTS1_N_TESTS_PRIOR, v3.UTS1_N_TESTS, v3.UTS1_ALPHA,
+     v3.UTS1_SHIFT_N, 130),
+    ("RELU1", v3.RELU1_N_TESTS_PRIOR, v3.RELU1_N_TESTS, v3.RELU1_ALPHA,
+     v3.RELU1_SHIFT_N, 136),
+    ("RELU2", v3.RELU2_N_TESTS_PRIOR, v3.RELU2_N_TESTS, v3.RELU2_ALPHA,
+     v3.RELU2_SHIFT_N, 142),
+    ("RELU3", v3.RELU3_N_TESTS_PRIOR, v3.RELU3_N_TESTS, v3.RELU3_ALPHA,
+     v3.RELU3_SHIFT_N, 148),
+    ("RELU4", v3.RELU4_N_TESTS_PRIOR, v3.RELU4_N_TESTS, v3.RELU4_ALPHA,
+     v3.RELU4_SHIFT_N, 154),
 ]
+# Прогоны, у которых после перенумерации запас alpha/пол стал меньше 2: число
+# сдвигов задним числом не меняется. Порог остаётся достижимым (пол <= alpha).
+_MARGIN_SHORT_AFTER_RENUMBER = {"UTS0": 1.92, "RELU3": 1.95}
 
 
 # ---------------- цепочка счётчика ----------------
@@ -66,11 +83,27 @@ def test_chain_chain_is_continuous_where_declared():
     assert v3.NDVI_N_TESTS_PRIOR == v3.RED_N_TESTS_TOTAL == 51
 
 
-def test_uts0_gap_is_the_declared_eight():
-    """UTS0 = XFER + свои 6 + 4 (DEM) + 4 (DEM1, с другого компьютера) = 118."""
+def test_xfer_two_records_and_chain_after_it():
+    """XFER: объявленная запись 104 + 6 = 110 (не трогается) и честная 112 + 6
+    = 118 (после DEM, DEM1). Дальше одна цепочка: XFER2 118 -> 124, UTS0 124 ->
+    130 (перенумерация 05.11.2026)."""
+    from experiments import openlin_dem_lines as dem
     assert v3.XFER_N_TESTS == 6
-    assert v3.UTS0_N_TESTS_PRIOR - (v3.XFER_N_TESTS_PRIOR + v3.XFER_N_TESTS) == 8
     assert v3.XFER_N_TESTS_PRIOR + v3.XFER_N_TESTS == 110
+    assert v3.XFER_HONEST_PRIOR == dem.DEM1_N_TESTS_PRIOR + dem.DEM1_N_TESTS == 112
+    assert v3.XFER_R_ALPHA == pytest.approx(0.05 / 118)
+    assert v3.XFER2_N_TESTS_PRIOR == v3.XFER_HONEST_PRIOR + v3.XFER_N_TESTS == 118
+    assert v3.UTS0_N_TESTS_PRIOR == v3.XFER2_N_TESTS_PRIOR + v3.XFER2_N_TESTS == 124
+    assert v3.RELU1_N_TESTS_PRIOR == v3.UTS1_N_TESTS_PRIOR + v3.UTS1_N_TESTS
+    assert v3.RELU2_N_TESTS_PRIOR == v3.RELU1_N_TESTS_PRIOR + v3.RELU1_N_TESTS
+    assert v3.RELU3_N_TESTS_PRIOR == v3.RELU2_N_TESTS_PRIOR + v3.RELU2_N_TESTS
+    assert v3.RELU4_N_TESTS_PRIOR == v3.RELU3_N_TESTS_PRIOR + v3.RELU3_N_TESTS
+
+
+def test_xfer_ledger_uses_honest_thresholds():
+    assert set(v3.XFER_LEDGER) == {"lapland", "finland65"}
+    assert v3.XFER_LEDGER["lapland"][2] == 118
+    assert v3.XFER_LEDGER["finland65"][2] == 124
 
 
 def test_other_literal_jumps_are_the_known_ones():
@@ -92,8 +125,13 @@ def test_alpha_is_bonferroni_over_prior_plus_own(name, prior, n, alpha, _s, _p):
 @pytest.mark.parametrize("name,prior,n,alpha,n_shifts,_p", _RUNS,
                          ids=[r[0] for r in _RUNS])
 def test_threshold_is_reachable(name, prior, n, alpha, n_shifts, _p):
-    """Пол p = 1/(n_shifts+1) не выше alpha/2 (запас не меньше 2)."""
+    """Пол p = 1/(n_shifts+1) не выше alpha/2 (запас не меньше 2). Исключения —
+    только записанные при перенумерации: там пол не выше alpha, запас как записан."""
     floor = 1.0 / (n_shifts + 1)
+    if name in _MARGIN_SHORT_AFTER_RENUMBER:
+        assert floor <= alpha, name
+        assert alpha / floor == pytest.approx(_MARGIN_SHORT_AFTER_RENUMBER[name], abs=0.01), name
+        return
     assert floor <= alpha / 2, f"{name}: пол {floor:.5f} > alpha/2 {alpha / 2:.5f}"
 
 
@@ -248,9 +286,9 @@ def test_callers_use_scene_cache():
 # ---------------- UTS1 ----------------
 
 def test_uts1_chain_and_alpha_and_reachability():
-    assert v3.UTS1_N_TESTS_PRIOR == v3.UTS0_N_TESTS_PRIOR + v3.UTS0_N_TESTS == 124
+    assert v3.UTS1_N_TESTS_PRIOR == v3.UTS0_N_TESTS_PRIOR + v3.UTS0_N_TESTS == 130
     assert v3.UTS1_N_TESTS == 6
-    assert v3.UTS1_ALPHA == pytest.approx(0.05 / 130)
+    assert v3.UTS1_ALPHA == pytest.approx(0.05 / 136)
     assert v3.UTS1_SHIFT_N == 6000
     assert 1.0 / (v3.UTS1_SHIFT_N + 1) <= v3.UTS1_ALPHA / 2
 
@@ -311,9 +349,9 @@ def test_slope_plane_and_nan():
 
 
 def test_relu1_alpha_and_reachability():
-    assert v3.RELU1_N_TESTS_PRIOR == 130
+    assert v3.RELU1_N_TESTS_PRIOR == 136
     assert v3.RELU1_N_TESTS == 6
-    assert v3.RELU1_ALPHA == pytest.approx(0.05 / 136)
+    assert v3.RELU1_ALPHA == pytest.approx(0.05 / 142)
     assert v3.RELU1_SHIFT_N == 6000
     floor = 1.0 / (v3.RELU1_SHIFT_N + 1)
     assert floor <= v3.RELU1_ALPHA / 2
@@ -384,3 +422,15 @@ def test_halves_cache_without_scenes_key_rebuilt_unless_anabar(monkeypatch, tmp_
     except Exception:
         pass                                     # пересборка на крошечных данных
     assert any("пересборка" in m for m in msgs)
+
+
+def test_anfl_features_and_labels():
+    """ANFL0 (поправка 1 п. 7): 20 признаков в объявленном порядке; метка на синтетике; lo=None — двоичная."""
+    pytest.importorskip("geopandas")
+    pytest.importorskip("rasterio")
+    from experiments import openlin_anfl as af
+    assert len(af.FEATS) == 20 and af.ANFL0_N_TESTS == 0
+    assert af.FEATS[5:8] == ["сила (z)", "log длины", "прямизна"]
+    assert af.FEATS[17:] == ["ALOS: ложбина (z)", "ALOS: гребень (z)", "до линии другого канала, м"]
+    assert af.QNORM == (5, 6, 7, 17, 18, 19) and af.LABEL_FRAC == 0.5
+    af.self_test()

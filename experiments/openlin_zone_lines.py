@@ -234,6 +234,28 @@ def mask_of(lines: list, shape) -> np.ndarray:
     return m
 
 
+def save_line_sets(path: Path, **sets: list) -> None:
+    """Наборы линий поштучно: ячейки каждой линии и её номер.
+
+    Маска (``mask_of``) теряет, где кончается одна линия и начинается
+    соседняя: касающиеся линии в ней сливаются. Для векторного экспорта
+    (ТЗ К1, Пакет 01) нужны сами линии. Для набора ``name`` пишутся
+    ``name_pts`` (ячейки строка/столбец), ``name_id`` (номер линии у каждой
+    ячейки), ``name_len_km`` и ``name_az`` (длина по трассе и азимут из тракта).
+    """
+    out = {}
+    for name, L in sets.items():
+        pts = [np.asarray(r["pts"], dtype="int32") for r in L]
+        out[f"{name}_pts"] = (np.concatenate(pts) if pts
+                              else np.zeros((0, 2), "int32"))
+        out[f"{name}_id"] = np.concatenate(
+            [np.full(len(p), i, "int32") for i, p in enumerate(pts)]) if pts \
+            else np.zeros(0, "int32")
+        out[f"{name}_len_km"] = np.array([r["длина_км"] for r in L], "float64")
+        out[f"{name}_az"] = np.array([r.get("азимут", np.nan) for r in L], "float64")
+    np.savez_compressed(path, **out)
+
+
 def zone_and_strike(site: str, k: int) -> tuple[np.ndarray, np.ndarray]:
     """Зона согласия и поле простирания со 100 м на сетку 20 м."""
     from experiments.openlin_forest_kora import neigh_all

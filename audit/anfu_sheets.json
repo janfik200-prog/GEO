@@ -1,0 +1,38 @@
+{
+ "ranking_sha256": "4c7ae25c85083ec60dc5a3a0118a118a89d3fc71554876ad7e751947d1b03d07",
+ "n_candidates": 60,
+ "extra_all_count": 0,
+ "extra": [],
+ "reserve_v1_rejected": [
+  {
+   "name": "anfu_test1",
+   "lat": 66.682,
+   "lon": 27.125,
+   "fin": 1.0,
+   "R": 23.9
+  },
+  {
+   "name": "anfu_test2",
+   "lat": 67.564,
+   "lon": 24.782,
+   "fin": 1.0,
+   "R": 18.9
+  }
+ ],
+ "reserve": [
+  {
+   "name": "anfu_test1",
+   "lat": 65.905,
+   "lon": 28.439,
+   "R": 24.8
+  },
+  {
+   "name": "anfu_test2",
+   "lat": 64.107,
+   "lon": 28.756,
+   "R": 24.0
+  }
+ ],
+ "reserve_rule": "поправка 2: ≥20 км ко всем использованным, полоса ≥ 64,0°, по R",
+ "reserve_candidates": 24
+}

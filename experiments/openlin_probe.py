@@ -51,7 +51,7 @@ class Site:
     name: str
     lat: float
     lon: float
-    faults: Path | tuple[Path, ...]
+    faults: Path | tuple[Path, ...] | None
     #: Поле, по которому отбираются разломы среди прочих линий слоя. ``None`` —
     #: когда слой целиком состоит из разломов (так у анабарских tect1/tect2).
     fault_query: str | None
@@ -102,7 +102,32 @@ SITES: dict[str, Site] = {
         faults=Path("datacache/gtk_lineaments/lin500k_292.gpkg"),
         fault_query=None, epsg=32635,
         comment="Утсйоки, Фенноскандинавский щит, тундра; линеаменты GTK 1:500k (LiDAR)"),
+    # Третья площадка (ТЗ К1, Пакет 09): выбрана правилом audit/PACKET09_DECLARATION.md
+    # (openlin_pick_site, зерно 20261028) — первый допустимый кандидат.
+    "finland65": Site(
+        name="finland65", lat=65.0, lon=27.0,
+        faults=None, fault_query=None, epsg=32635,
+        comment="средняя Финляндия, щит; второй перенос (XFER2), эталон GTK — после"),
 }
+
+# Листы обучения FAM2 (10.11.2026): выбраны правилом openlin_fam_sites,
+# список в audit/fam2_sites.json; эталон GTK 292 — метка обучения, не вход.
+_FAM2 = Path("audit/fam2_sites.json")
+if _FAM2.exists():
+    import json as _json
+    for _s in _json.loads(_FAM2.read_text(encoding="utf-8")):
+        SITES[_s["name"]] = Site(name=_s["name"], lat=_s["lat"], lon=_s["lon"], faults=None,
+                                 fault_query=None, epsg=32635,
+                                 comment="север Финляндии, лист обучения FAM2")
+# Листы обучения FAM3 (10.11.2026): отбор по расчленённости рельефа,
+# список в audit/fam3_sites.json (audit/FAM3_DECLARATION.md).
+_FAM3 = Path("audit/fam3_sites.json")
+if _FAM3.exists():
+    import json as _json
+    for _s in _json.loads(_FAM3.read_text(encoding="utf-8")):
+        SITES[_s["name"]] = Site(name=_s["name"], lat=_s["lat"], lon=_s["lon"], faults=None,
+                                 fault_query=None, epsg=32635,
+                                 comment="север Финляндии, лист обучения FAM3 (рельеф)")
 
 # --------------------------------------------------------------------------
 # Композит: те же принципы, что у src/s2_composite.py, но CRS площадки
@@ -482,8 +507,12 @@ def main() -> None:
     log(f"сетка {grid.height}x{grid.width}, шаг {grid.res_m:.0f} м, "
         f"EPSG:{grid.epsg}; bbox {[round(v, 3) for v in grid.bbox_wgs84()]}")
 
-    log("разломы:")
-    dist, n_faults = fault_distance(grid, site, log)
+    if site.faults is None:
+        log("разломы: на входе площадки их нет (эталон — только сверка после)")
+        dist, n_faults = np.full(grid.shape, np.inf, dtype="float32"), 0
+    else:
+        log("разломы:")
+        dist, n_faults = fault_distance(grid, site, log)
 
     log("снимок:")
     items = search_scenes(grid, log)
@@ -509,7 +538,7 @@ def main() -> None:
     log(f"КОНТРАСТ КОРИДОРОВ на «{site.name}»:")
     log("  полуширина | медиан | разброс |  внутри |  кольцо")
     rows = []
-    for corridor_m in (0.0, 250.0, 500.0, 1000.0):
+    for corridor_m in (() if site.faults is None else (0.0, 250.0, 500.0, 1000.0)):
         got = dl.corridor_contrast(gray.ravel(), dist.ravel(), sigma,
                                    corridor_m=corridor_m)
         rows.append({"полуширина_м": corridor_m, **got})

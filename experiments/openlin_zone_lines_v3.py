@@ -580,6 +580,58 @@ XFER_SHIFT_N = 5000
 #: 0.000212, запас 2.12x; p = 0.0002 проходит, вердикт XFER не меняется.
 #: Записанные константы (104/110) оставлены как объявлены до прогона, чтобы
 #: не переписывать опубликованное.
+#: ВОССТАНОВЛЕНИЕ XFER (26.10.2026, на компьютере, где шли DEM и DEM1). Прогон
+#: Лапландии повторён по отчёту 25.10 и совпал с ним во всех числах (лог
+#: ``_zone_lines_lapland_v3_перенос.log``: в зонах 88 / 140 км, весь лист
+#: 1106 / 1339 км, все четыре условия пройдены). Повтор нового слагаемого не
+#: добавляет, но идёт против ЧЕСТНОГО счётчика на момент первого запуска:
+#: после DEM1 112, плюс свои 6 = 118, alpha = 0.05/118 = 0.000424, пол 0.0002,
+#: запас 2.12x (audit/DISCREPANCIES.md, D02). Объявленные 104/110 выше не
+#: тронуты — так прогон был записан до запуска. 112 записано числом: DEM1_*
+#: объявлены в openlin_dem_lines, который сам импортирует этот модуль;
+#: совпадение проверяется в main.
+XFER_HONEST_PRIOR = 112                                          # = DEM1_N_TESTS_PRIOR + DEM1_N_TESTS
+XFER_R_ALPHA = 0.05 / (XFER_HONEST_PRIOR + XFER_N_TESTS)        # 0.000424
+
+# ---- XFER2: второй перенос, третья площадка finland65 (26.10.2026) ---------
+#: ТЗ К1, Пакет 09; объявление audit/PACKET09_DECLARATION.md. Площадка выбрана
+#: правилом (openlin_pick_site, зерно 20261028) до прогона. Тракт тот же, что
+#: XFER, все числа анабарские. Новое слагаемое после XFER: 118 + 6 = 124.
+#: Сдвигов: n >= 2/alpha - 1 = 4959; берётся 5000, пол 0.0002, запас 2.0x.
+#: РЕЗУЛЬТАТ (26.10.2026, лог ``_zone_lines_finland65_v3_перенос.log``): ЧАСТИЧНО.
+#: В зонах 127 линий / 137 км — все четыре условия пройдены (мусор 0.0 %,
+#: p = 0.0002, устойчивость 0.796 при нуле 0.002, длиннее шума 26.8 %). Весь
+#: лист 910 / 893 км — НЕ пройдена длина (18.5 % при требуемых 25 %; медиана
+#: 0.84 км), остальные пройдены. «Кора»: простирание верхних 10 % расходится на
+#: 68° (порог 10°) — не пройдено. Сверка с GTK 292 (свой счётчик): связи нет,
+#: по листу отрицательная (полнота 6.6 % при нуле 10.2 %, p = 0.99). Глазом:
+#: плоская болотно-лесная равнина, детектор ловит края заснеженных болот и озёр.
+#: Граница применимости (audit/PACKET09_RESULTS.md); тракт не перенастраивается.
+XFER2_N_TESTS_PRIOR = XFER_HONEST_PRIOR + XFER_N_TESTS      # 118
+XFER2_N_TESTS = 6
+XFER2_ALPHA = 0.05 / (XFER2_N_TESTS_PRIOR + XFER2_N_TESTS)  # 0.000403
+XFER2_SHIFT_N = 5000
+#: какой перенос у какой площадки — слагаемое своё у каждого прогона
+XFER_LEDGER = {"lapland": (XFER_R_ALPHA, XFER_SHIFT_N, XFER_HONEST_PRIOR + XFER_N_TESTS),
+               "finland65": (XFER2_ALPHA, XFER2_SHIFT_N, XFER2_N_TESTS_PRIOR + XFER2_N_TESTS)}
+#: ПЕРЕНУМЕРАЦИЯ 05.11.2026 (решение Артура, при сведении двух компьютеров).
+#: Ветка шла параллельно на двух компьютерах от коммита 25cb5df, и место
+#: 118 -> 124 заняли два разных прогона: XFER2 (finland65, 26.10.2026) здесь и
+#: UTS0 (Утсйоки, 04-05.11.2026) там. XFER2 был раньше, и его 124 уже
+#: опубликовано (статья ИПУЗ, отчёт К1), поэтому он остаётся на месте, а всё,
+#: что шло после него на другом компьютере, сдвигается на его слагаемое +6:
+#: UTS0 124 -> 130, UTS1 130 -> 136, RELU1 136 -> 142, RELU2 142 -> 148,
+#: RELU3 148 -> 154, RELU4 154 -> 160. Пороги этих прогонов стали строже; числа
+#: в их объявлениях ниже — ПРЕЖНИЕ, как записаны до запуска.
+#: ЗАПАС ПОРОГА после сдвига (число сдвигов задним числом не меняется): UTS0
+#: 5000 сдвигов, 0.05/130 * 5001 = 1.92x; RELU3 6000, 0.05/154 * 6001 = 1.95x —
+#: меньше правила «не меньше 2x», но пол 1/(n+1) ниже alpha, порог достижим.
+#: Остальные: UTS1 2.21x, RELU1 2.11x, RELU2 2.03x, RELU4 2.03x.
+#: ВЕРДИКТЫ: строже стал только порог сдвигового нуля. Если p прогона был на
+#: полу (0.0002 / 0.000167 / 0.000154), он ниже нового alpha и вердикт не
+#: меняется; RELU2-4 не прошли по другим условиям (мусор, длина) и остаются
+#: непринятыми. Значения p из логов (outputs/, на другом компьютере) при
+#: сведении не сверялись — сверить, когда логи будут здесь.
 #: БАЗОВЫЙ ПРОГОН НА ПЛОЩАДКЕ НАСТРОЙКИ (05.11.2026, объявлено до прогона;
 #: решение Артура 05.11.2026). У площадки теперь три роли: Утсйоки
 #: (``SITES["utsjoki"]``, 69.551 с. ш., 27.142 в. д.) — НАСТРОЙКА: тракт там
@@ -613,9 +665,9 @@ XFER_SHIFT_N = 5000
 #: Сдвигов: n >= 2/alpha - 1 = 4959; берётся 5000, пол 1/5001 = 0.0002, запас
 #: alpha * 5001 = 2.02x (>= 2, достижимо; запас вплотную — число сдвигов
 #: уменьшать нельзя).
-UTS0_N_TESTS_PRIOR = XFER_N_TESTS_PRIOR + XFER_N_TESTS + 4 + 4   # 118 (+DEM, +DEM1)
+UTS0_N_TESTS_PRIOR = XFER2_N_TESTS_PRIOR + XFER2_N_TESTS        # 124 (было 118, см. ПЕРЕНУМЕРАЦИЯ)
 UTS0_N_TESTS = 6
-UTS0_ALPHA = 0.05 / (UTS0_N_TESTS_PRIOR + UTS0_N_TESTS)         # 0.000403
+UTS0_ALPHA = 0.05 / (UTS0_N_TESTS_PRIOR + UTS0_N_TESTS)         # 0.000385 (было 0.000403)
 UTS0_SHIFT_N = 5000
 #: ПРАВИЛО ДЛЯ ПРОГОНОВ НАСТРОЙКИ (то же — в OPENLIN_RULES.md, «Роли
 #: площадок»). Проверки на Утсйоки в анабарский счётчик как доказательства
@@ -660,9 +712,9 @@ UTS0_SHIFT_N = 5000
 #: ``openlin_transfer_check --site utsjoki --tag _настройка1`` (для сведения).
 #: Ключ ``--настройка1`` — только ``--site utsjoki``, только рабочий набор TWIN,
 #: тег файла ``_настройка1``; несовместим с ``--настройка0`` и ``--перенос``.
-UTS1_N_TESTS_PRIOR = UTS0_N_TESTS_PRIOR + UTS0_N_TESTS           # 124
+UTS1_N_TESTS_PRIOR = UTS0_N_TESTS_PRIOR + UTS0_N_TESTS           # 130 (было 124)
 UTS1_N_TESTS = 6
-UTS1_ALPHA = 0.05 / (UTS1_N_TESTS_PRIOR + UTS1_N_TESTS)         # 0.000385
+UTS1_ALPHA = 0.05 / (UTS1_N_TESTS_PRIOR + UTS1_N_TESTS)         # 0.000368 (было 0.000385)
 UTS1_SHIFT_N = 6000
 #: СЛОЙ ЛИНИЙ ПО РЕЛЬЕФУ НА ПЛОЩАДКЕ НАСТРОЙКИ — RELU1 (05.11.2026, объявлено
 #: ДО прогона; код тракта допишет основная сессия по этому объявлению).
@@ -721,9 +773,9 @@ UTS1_SHIFT_N = 6000
 #: Ключ ``--рельеф`` — только ``--site utsjoki``, только рабочий набор TWIN, тег
 #: файла ``_рельеф1``; несовместим с ``--перенос``, ``--настройка0``,
 #: ``--настройка1``.
-RELU1_N_TESTS_PRIOR = UTS1_N_TESTS_PRIOR + UTS1_N_TESTS         # 130 (в цепочку не входит)
+RELU1_N_TESTS_PRIOR = UTS1_N_TESTS_PRIOR + UTS1_N_TESTS         # 136 (было 130; в цепочку не входит)
 RELU1_N_TESTS = 6
-RELU1_ALPHA = 0.05 / (RELU1_N_TESTS_PRIOR + RELU1_N_TESTS)      # 0.000368
+RELU1_ALPHA = 0.05 / (RELU1_N_TESTS_PRIOR + RELU1_N_TESTS)      # 0.000352 (было 0.000368)
 RELU1_SHIFT_N = 6000
 
 #: ЛОЖБИНЫ ПО РЕЛЬЕФУ НА ПЛОЩАДКЕ НАСТРОЙКИ — RELU2 (05.11.2026, объявлено ДО
@@ -773,9 +825,9 @@ RELU1_SHIFT_N = 6000
 #: Ключ ``--ложбины`` — только ``--site utsjoki``, только рабочий набор TWIN, тег
 #: файла ``_ложбины1``; несовместим с ``--рельеф``, ``--перенос``,
 #: ``--настройка0``, ``--настройка1``.
-RELU2_N_TESTS_PRIOR = RELU1_N_TESTS_PRIOR + RELU1_N_TESTS       # 136 (в цепочку не входит)
+RELU2_N_TESTS_PRIOR = RELU1_N_TESTS_PRIOR + RELU1_N_TESTS       # 142 (было 136; в цепочку не входит)
 RELU2_N_TESTS = 6
-RELU2_ALPHA = 0.05 / (RELU2_N_TESTS_PRIOR + RELU2_N_TESTS)      # 0.000352
+RELU2_ALPHA = 0.05 / (RELU2_N_TESTS_PRIOR + RELU2_N_TESTS)      # 0.000338 (было 0.000352)
 RELU2_SHIFT_N = 6000
 
 #: ЛОЖБИНЫ, ПОДТВЕРЖДЕНИЕ СНИМКОМ — RELU3 (05.11.2026, объявлено ДО прогона;
@@ -809,9 +861,9 @@ RELU2_SHIFT_N = 6000
 #: Ключ ``--ложбины-снимок`` — только ``--site utsjoki``, только TWIN, тег файла
 #: ``_ложбины2``; несовместим с ``--рельеф``, ``--ложбины``, ``--перенос``,
 #: ``--настройка0``, ``--настройка1``.
-RELU3_N_TESTS_PRIOR = RELU2_N_TESTS_PRIOR + RELU2_N_TESTS       # 142 (в цепочку не входит)
+RELU3_N_TESTS_PRIOR = RELU2_N_TESTS_PRIOR + RELU2_N_TESTS       # 148 (было 142; в цепочку не входит)
 RELU3_N_TESTS = 6
-RELU3_ALPHA = 0.05 / (RELU3_N_TESTS_PRIOR + RELU3_N_TESTS)      # 0.000338
+RELU3_ALPHA = 0.05 / (RELU3_N_TESTS_PRIOR + RELU3_N_TESTS)      # 0.000325 (было 0.000338)
 RELU3_SHIFT_N = 6000
 
 #: ЛОЖБИНЫ, ПОДТВЕРЖДЕНИЕ РАДАРОМ — RELU4 (05.11.2026, объявлено ДО прогона;
@@ -856,11 +908,12 @@ RELU3_SHIFT_N = 6000
 #: Ключ ``--ложбины-радар`` — только ``--site utsjoki``, только TWIN, тег файла
 #: ``_ложбины3``; несовместим с ``--рельеф``, ``--ложбины``, ``--ложбины-снимок``,
 #: ``--перенос``, ``--настройка0``, ``--настройка1``.
-RELU4_N_TESTS_PRIOR = RELU3_N_TESTS_PRIOR + RELU3_N_TESTS       # 148 (в цепочку не входит)
+RELU4_N_TESTS_PRIOR = RELU3_N_TESTS_PRIOR + RELU3_N_TESTS       # 154 (было 148; в цепочку не входит)
 RELU4_N_TESTS = 6
-RELU4_ALPHA = 0.05 / (RELU4_N_TESTS_PRIOR + RELU4_N_TESTS)      # 0.000325
+RELU4_ALPHA = 0.05 / (RELU4_N_TESTS_PRIOR + RELU4_N_TESTS)      # 0.000313 (было 0.000325)
 RELU4_SHIFT_N = 6500
 RELU4_LEN_MIN_POOL = 20      # минимум линий в пуле подделок для процентиля
+
 
 
 def _wide_open(zb: np.ndarray, p, q) -> np.ndarray:
@@ -940,6 +993,8 @@ def build_halves(site: str, log, channel: str = "B04") -> dict[str, np.ndarray]:
     files = sorted((f for f in scene_cache(site).glob("*_лист_20m.npz")
                     if f.name.split("_лист")[0] in own),
                    key=lambda f: f.name.split("_")[2][:8])
+    if len(files) != len(own):                     # проверка из версии К1
+        raise SystemExit(f"в кэше {len(files)} сцен площадки из {len(own)}")
     by_tile: dict[str, list] = {}
     for f in files:
         tile = next(p for p in f.name.split("_") if p.startswith("T"))
@@ -1444,7 +1499,8 @@ def main() -> None:
                          "(см. CLEAN1K_* в шапке); свой файл")
     ap.add_argument("--перенос", dest="xfer", action="store_true",
                     help="рабочий набор на другой площадке, пороги заморожены "
-                         "(см. XFER_* в шапке); только --site lapland (контроль)")
+                         "(см. XFER_* и XFER_LEDGER в шапке); только площадки "
+                         "контроля: --site lapland, --site finland65")
     ap.add_argument("--настройка0", dest="tune0", action="store_true",
                     help="базовый прогон рабочего тракта на площадке настройки "
                          "(см. UTS0_* в шапке); только --site utsjoki")
@@ -1470,6 +1526,14 @@ def main() -> None:
                     help="усреднение снимка вдоль линии перед детектором (см. "
                          "CLEAN_* в шапке); свой файл, рабочий набор не трогается")
     a = ap.parse_args()
+    if a.xfer:
+        from experiments import openlin_dem_lines as _dem
+        assert XFER_HONEST_PRIOR == _dem.DEM1_N_TESTS_PRIOR + _dem.DEM1_N_TESTS, \
+            "цепочка счётчика разошлась с DEM1"
+        if a.site == "anabar" or any((a.bridges, a.wide, a.old_chains, a.clean,
+                                      a.clean1k, a.scenes != "12",
+                                      a.channel != "B04")):
+            raise SystemExit("перенос объявлен для рабочего тракта на другой площадке")
 
     def log(m=""):
         print(m, flush=True)
@@ -1522,11 +1586,11 @@ def main() -> None:
         n_total = TWIN_N_TESTS_PRIOR + TWIN_N_TESTS
         tag = "_бл"
     if a.xfer:
-        if not a.twin or a.site != "lapland":
-            raise SystemExit("перенос объявлен для рабочего набора и площадки "
-                             "Лапландия (контроль); Утсйоки — ключ --настройка0")
-        p_max, n_sh = XFER_ALPHA, XFER_SHIFT_N
-        n_total = XFER_N_TESTS_PRIOR + XFER_N_TESTS
+        if not a.twin or a.site not in XFER_LEDGER:
+            raise SystemExit("перенос объявлен для рабочего набора и площадок "
+                             "контроля (XFER_LEDGER: Лапландия, finland65); "
+                             "Утсйоки — ключ --настройка0")
+        p_max, n_sh, n_total = XFER_LEDGER[a.site]
         tag = "_перенос"
     if a.tune0:
         if not a.twin or a.xfer or a.site != "utsjoki":
@@ -1900,6 +1964,10 @@ def main() -> None:
                         C_all=mask_of(Cw, valid.shape),
                         geom_real=geom_real[0] if geom_real else np.zeros((0, 2)),
                         geom_fake=geom_fake[0] if geom_fake else np.zeros((0, 2)))
+    # поштучно — для векторного экспорта (openlin_export_vectors)
+    from experiments.openlin_zone_lines import save_line_sets
+    save_line_sets(M / f"openlin_zone_lines_{a.site}_v3{tag}_линии.npz",
+                   A=A, C=C, A_all=Aw, C_all=Cw)
     from experiments.openlin_zone_lines import plot
     plot(opt, valid, zone, A, C, f"{a.site}_v3{tag}", junkC, stab, log,
          conf="подтверждены обеими съёмками")

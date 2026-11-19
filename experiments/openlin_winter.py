@@ -245,8 +245,11 @@ def plot(comp: dict, shade: np.ndarray, site: str, res_m: float, log,
         a_.set_title(ttl, fontsize=13)
         a_.set_xticks([]); a_.set_yticks([])
     fig.tight_layout()
+    # имя у Анабара прежнее; у других площадок — со своим суффиксом, иначе
+    # картинка Анабара затирается (так случилось 25.10.2026, D07 в audit/)
     p = Path("outputs/steps/зимний_композит"
-             + ("_лист" if full else "") + ".png")
+             + ("_лист" if full else "")
+             + ("" if site == "anabar" else f"_{site}") + ".png")
     p.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(p, dpi=110)
     log(f"сохранено: {p}")

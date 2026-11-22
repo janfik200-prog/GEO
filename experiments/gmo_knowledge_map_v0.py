@@ -36,6 +36,9 @@
     python -X utf8 -m experiments.gmo_knowledge_map_v0 --вариант-б           # v0.2, вариант Б
     python -X utf8 -m experiments.gmo_knowledge_map_v0 --чистые-линеаменты --сохранность
 
+Ключ --v0-3 — v0.2 с сохранностью плюс К14 и вмещающая среда по разрезу
+(`V03_NOTE`), выход `knowledge_map_v0_3.parquet`; v0.2 не меняется.
+
 Ключ --сохранность добавляет звено С (`preservation`, выход с суффиксом `_s`);
 с 22.11.2026 — по ответу ВНИГНИ 19.11: палеопонижения и разломы под покровом.
 
@@ -141,13 +144,30 @@ VARIANT = "А"
 #: * два места сохранности — альтернативы, «или» (максимум) К28г и К28д.
 #: Кембрий над рифеем сохранности не мешает (К29а «рифей сохранён»).
 PRESERVE = False
+#: v0.3 (ключ --v0-3, 22.11.2026) — v0.2 с сохранностью плюс то, что модель
+#: может заполнить сама, без ответов ВНИГНИ:
+#: * К14 магнитный дефицит в магнитоактивном блоке (О7, М/I–II; Г5): внутри
+#:   блока, где региональное поле `pf_mag_up10` выше медианы листа, —
+#:   остаток `pf_mag_up1` − `pf_mag_up10`, меньше — лучше; вне блока
+#:   разрушать нечего — «не наблюдается»;
+#: * К23 по разрезу: вмещающая свита из списка ВНИГНИ не глубже 500 м
+#:   (`*_in500` карты свит; ответ ВНИГНИ 19.11 о глубине), а не только на
+#:   поверхности: под чехлом, кембрием и юсмастахской свитой свита
+#:   списка теперь видна. Где разрез не восстановлен — прежняя доля по
+#:   поверхности `svk_list`.
+#: Исправленные каналы линеаментов (поправка на фон) сюда не входят — ждут
+#: решения по К1 и К21.
+V03 = False
+SECTION_HOST = False
 SVITY_GRID = ROOT / "data/processed/svity_section_grid.parquet"
 MAX_DEPTH_M = 500.0
 
 
 def load() -> pd.DataFrame:
     feats = sorted({f for objs in MODEL.values() for crits in objs.values()
-                    for fl in crits.values() for f, _ in fl} - {"nw_align"})
+                    for fl in crits.values() for f, _ in fl} - {"nw_align", "mag_deficit"})
+    if V03:
+        feats = sorted(set(feats) | {"pf_mag_up1", "pf_mag_up10"})
     df = pd.read_parquet(DATA, columns=["row", "col", "x", "y", spectral_mask.BARE_COL,
                                         "lin_dir_cos", "lin_dir_sin"] + feats)
     df = df.merge(pd.read_parquet(K23, columns=["row", "col", "svk_cover", "svk_list"]),
@@ -165,6 +185,18 @@ def load() -> pd.DataFrame:
     # Отрезок СЗ–ЮВ даёт lin_dir_sin = +1 (проверено синтетическим отрезком
     # 05.11.2026). В v0–v0.2 стояло −lin_dir_sin — К5 поощрял северо-восток.
     df["nw_align"] = df.lin_dir_sin
+    if V03:
+        # К14: дефицит только внутри магнитоактивного блока (медиана — по листу)
+        act = df.pf_mag_up10 > df.pf_mag_up10.median()
+        df["mag_deficit"] = (df.pf_mag_up1 - df.pf_mag_up10).where(act)
+    if SECTION_HOST:
+        keys = ("il", "br", "lb", "ul", "kt")
+        sg = pd.read_parquet(SVITY_GRID, columns=["row", "col"] + [f"{k}_in500" for k in keys])
+        v = sg[[f"{k}_in500" for k in keys]]
+        sg["svk_sec"] = np.where((v == 1).any(axis=1), 1.0, np.where((v == 0).all(axis=1), 0.0, np.nan))
+        df = df.merge(sg[["row", "col", "svk_sec"]], on=["row", "col"], how="left")
+        df["svk_list_surface"] = df.svk_list
+        df["svk_list"] = df.svk_sec.fillna(df.svk_list)
     exposed = spectral_mask.exposure_mask(df)
     for c in df.columns:
         if c.startswith(SPECTRAL) and c != spectral_mask.BARE_COL:
@@ -357,8 +389,13 @@ def main() -> None:
     # накопления», и карта повторяла современную речную сеть (Г6: палеорельеф
     # не наблюдается; пробы по рыхлым отбирают в долинах — совпадение с ними
     # ложное).
-    global TAG, CLEAN, VARIANT, PRESERVE
+    global TAG, CLEAN, VARIANT, PRESERVE, V03, SECTION_HOST
     PRESERVE = "--сохранность" in sys.argv
+    if "--v0-3" in sys.argv:
+        V03 = SECTION_HOST = PRESERVE = True
+        sys.argv.append("--чистые-линеаменты")
+        MODEL["М мобилизация"]["О7 реактивация и выщелачивание"][
+            "К14 магнитный дефицит в блоке"] = [("mag_deficit", "↓")]
     b = "--вариант-б" in sys.argv
     if "--без-долин" in sys.argv or "--чистые-линеаменты" in sys.argv or b:
         del MODEL["Н место накопления"]["О14 впадины"]
@@ -371,7 +408,9 @@ def main() -> None:
         VARIANT, TAG = "Б", "_v0_2_b"
         for (link, obj, crit), fl in FORMULA.items():
             MODEL[link].setdefault(obj, {}).setdefault(crit, []).extend(fl)
-    if PRESERVE:
+    if V03:
+        TAG = "_v0_3"
+    elif PRESERVE:
         TAG += "_s"
     df = load()
     m = build(df)

@@ -171,6 +171,19 @@ PRESERVE = False
 #:   Ог1: К6 несёт разломную зону, поэтому считается только там, где
 #:   разломная зона отдана звену «путь».
 V03 = False
+#: v0.3a (ключ --v0-3a): v0.3 плюс радиусы критериев по мировой литературе
+#: (`Параметры-критериев-по-литературе-черновик.md`, 22.11.2026, надёжность
+#: низкая) и О2 кандидатом в место накопления (базальный горизонт на
+#: несогласии; решение руководителя 22.11.2026). Радиус — полная мера до
+#: первого числа, линейный спад до второго:
+#: * К2 (линеаменты как малые разломы): 1 → 2 км по метрическому расстоянию,
+#:   только в стратах, где линии видны (иначе «не наблюдается», Ог4);
+#: * К4 и К28д (кромки потенциальных полей): 5 → 10 км от смены знака тилта;
+#: * К7 (несогласие, в путях и в местах накопления): 1 → 2 км.
+#: Правило «одна поверхность — одно звено» для О2, как Ог1 для разломной зоны.
+V03A = False
+R_K2, R_K4, R_K7 = ("радиус", 1000.0, 2000.0), ("радиус", 5000.0, 10000.0), ("радиус", 1000.0, 2000.0)
+UNC = "О2 региональное несогласие"
 LBG = ROOT / "data/processed/lineament_bg.parquet"
 SECTION_CH = ROOT / "data/processed/section_channels.parquet"
 LBG_MAP = {"lin_dens": "lincxrank_dens", "lin_node_dens": "lincxrank_node_dens",
@@ -183,7 +196,10 @@ MAX_DEPTH_M = 500.0
 def load() -> pd.DataFrame:
     feats = sorted({f for objs in MODEL.values() for crits in objs.values()
                     for fl in crits.values() for f, _ in fl}
-                   - {"nw_align", "mag_deficit", "unc_dist", "unc_fault", "fold_convex"})
+                   - {"nw_align", "mag_deficit", "unc_dist", "unc_fault", "fold_convex",
+                      "lin_dist_m", "edge_gr_m", "edge_mag_m"})
+    if V03A:
+        feats = sorted(set(feats) | {"pf_gr_tdr", "pf_mag_tdr"})
     if V03:
         feats = sorted(set(feats) | {"pf_mag_up1", "pf_mag_up10"})
     df = pd.read_parquet(DATA, columns=["row", "col", "x", "y", spectral_mask.BARE_COL,
@@ -210,6 +226,14 @@ def load() -> pd.DataFrame:
         df["unc_fault"] = (membership(df.unc_dist, "↓") * membership(df.lin_dist, "↓"))
         df = df.merge(pd.read_parquet(SECTION_CH, columns=["row", "col", "fold_convex"]),
                       on=["row", "col"], how="left")
+        if V03A:
+            obs = pd.read_parquet(LBG, columns=["row", "col", "bg_observed_x"])
+            dm = lc[["row", "col", "linc_dist"]].merge(obs, on=["row", "col"])
+            dm["lin_dist_m"] = dm.linc_dist.where(dm.bg_observed_x)
+            df = df.merge(dm[["row", "col", "lin_dist_m"]], on=["row", "col"], how="left")
+            for c, out in (("pf_gr_tdr", "edge_gr_m"), ("pf_mag_tdr", "edge_mag_m")):
+                df[out] = edge_distance(df, c)
+            df["unc_fault"] = membership(df.unc_dist, R_K7) * membership(df.lin_dist_m, R_K2)
     df["nw_align"] = df.lin_dir_sin
     if V03:
         # К14: дефицит только внутри магнитоактивного блока (медиана — по листу)
@@ -230,6 +254,23 @@ def load() -> pd.DataFrame:
     return df[df.svk_cover.fillna(0) >= 0.5].reset_index(drop=True)
 
 
+def edge_distance(df: pd.DataFrame, col: str) -> pd.Series:
+    """Расстояние до кромки в поле — смены знака тилт-производной, м."""
+    from scipy.ndimage import distance_transform_edt
+    nrow, ncol = int(df.row.max()) + 1, int(df.col.max()) + 1
+    a = np.full((nrow, ncol), np.nan)
+    a[df.row, df.col] = df[col]
+    s = np.sign(a)
+    edge = np.zeros_like(a, bool)
+    for dr, dc in ((0, 1), (1, 0)):
+        x, y = s[:nrow - dr, :ncol - dc], s[dr:, dc:]
+        hit = (x * y) < 0
+        edge[:nrow - dr, :ncol - dc] |= hit
+        edge[dr:, dc:] |= hit
+    d = distance_transform_edt(~edge) * 500.0
+    return pd.Series(d[df.row, df.col], index=df.index).where(df[col].notna())
+
+
 def unconformity(cells: pd.DataFrame) -> pd.DataFrame:
     """К7 своим каналом: насколько региональное несогласие далеко от поверхности, м."""
     from scipy.ndimage import distance_transform_edt
@@ -248,7 +289,12 @@ def unconformity(cells: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame({"row": g.row, "col": g.col, "unc_dist": out})
 
 
-def membership(s: pd.Series, how: str) -> pd.Series:
+def membership(s: pd.Series, how) -> pd.Series:
+    if isinstance(how, tuple):
+        # («радиус», полная, предел): 1 до полной, линейный спад до 0 к пределу (м);
+        # дальше предела — 0 («наблюдается, но далеко»), пропуск остаётся пропуском
+        _, core, rmax = how
+        return (1 - (s - core) / (rmax - core)).clip(0, 1).where(s.notna())
     if how == "доля":
         return s.clip(0, 1)
     if how == "◇":
@@ -258,13 +304,17 @@ def membership(s: pd.Series, how: str) -> pd.Series:
     return s.rank(pct=True)
 
 
-def link_scores(df: pd.DataFrame, skip_fault: set[str]) -> tuple[pd.DataFrame, dict]:
-    """Оценки звеньев; `skip_fault` — звенья, где разломная зона не считается."""
+def link_scores(df: pd.DataFrame, skip_fault: set[str],
+                skip_unc: frozenset = frozenset()) -> tuple[pd.DataFrame, dict]:
+    """Оценки звеньев; `skip_fault` / `skip_unc` — звенья, где разломная зона /
+    несогласие не считается (одна поверхность — одно звено)."""
     scores, parts = {}, {}
     for link, objs in MODEL.items():
         obj_vals = {}
         for obj, crits in objs.items():
             if obj == FAULT and link in skip_fault:
+                continue
+            if obj == UNC and link in skip_unc:
                 continue
             # Ог1: К6 несёт разломную зону — только там, где она отдана этому звену
             crit_vals = [pd.concat([membership(df[f], h) for f, h in fl], axis=1).mean(axis=1)
@@ -313,7 +363,8 @@ def preservation(df: pd.DataFrame) -> tuple[pd.Series, pd.Series, pd.Series]:
     rif = ok & (g.rif_thick > 1)                 # рифей сохранился, в т.ч. под чехлом
     gone = ok & (g.rif_thick <= 1)               # К28а: рифей размыт — запрет
     k28g = (-g.basement_resid_m).where(rif & (g.basement_depth <= MAX_DEPTH_M)).rank(pct=True)
-    edge = [membership(df[c], "◇") for c in ("pf_gr_tdr", "pf_mag_tdr")]
+    edge = ([membership(df[c], R_K4) for c in ("edge_gr_m", "edge_mag_m")] if V03A
+            else [membership(df[c], "◇") for c in ("pf_gr_tdr", "pf_mag_tdr")])
     if VARIANT == "Б":
         edge += [membership(df[c], "↓") for c in ("dist_tect1", "dist_tect2")]
     k28d = pd.concat(edge, axis=1).mean(axis=1).where(rif)
@@ -336,12 +387,17 @@ def preservation(df: pd.DataFrame) -> tuple[pd.Series, pd.Series, pd.Series]:
 
 
 def build(df: pd.DataFrame) -> pd.DataFrame:
+    import itertools
     links_with_fault = [l for l, o in MODEL.items() if FAULT in o]
+    links_with_unc = [l for l, o in MODEL.items() if UNC in o]
+    unc_opts = links_with_unc if len(links_with_unc) > 1 else [None]
     best = None
-    for keep in links_with_fault:
-        sc, parts = link_scores(df, skip_fault=set(links_with_fault) - {keep})
+    for keep, keep_u in itertools.product(links_with_fault, unc_opts):
+        skip_u = frozenset(set(links_with_unc) - {keep_u}) if keep_u else frozenset()
+        sc, parts = link_scores(df, skip_fault=set(links_with_fault) - {keep}, skip_unc=skip_u)
         tot, conf = soft_and(sc)
-        cand = sc.add_prefix("звено ").assign(итог=tot, уверенность=conf, разлом_закрыл=keep)
+        cand = sc.add_prefix("звено ").assign(итог=tot, уверенность=conf, разлом_закрыл=keep,
+                                              несогласие_закрыло=keep_u)
         for l in MODEL:
             cand[f"объект {l}"] = parts[l]
         if best is None:
@@ -448,8 +504,11 @@ def main() -> None:
     # накопления», и карта повторяла современную речную сеть (Г6: палеорельеф
     # не наблюдается; пробы по рыхлым отбирают в долинах — совпадение с ними
     # ложное).
-    global TAG, CLEAN, VARIANT, PRESERVE, V03, SECTION_HOST
+    global TAG, CLEAN, VARIANT, PRESERVE, V03, SECTION_HOST, V03A
     PRESERVE = "--сохранность" in sys.argv
+    if "--v0-3a" in sys.argv:
+        V03A = True
+        sys.argv.append("--v0-3")
     if "--v0-3" in sys.argv:
         V03 = SECTION_HOST = PRESERVE = True
         sys.argv.append("--чистые-линеаменты")
@@ -476,7 +535,17 @@ def main() -> None:
         VARIANT, TAG = "Б", "_v0_2_b"
         for (link, obj, crit), fl in FORMULA.items():
             MODEL[link].setdefault(obj, {}).setdefault(crit, []).extend(fl)
-    if V03:
+    if V03A:
+        f = MODEL["И источник"][FAULT]
+        f["К2 близость к разломной зоне"] = [("lin_dist_m", R_K2)]
+        f["К4 разломные границы в полях"] = [("edge_gr_m", R_K4), ("edge_mag_m", R_K4),
+                                             ("gm_gr_1G_25", "↑")]
+        MODEL["П путь"][UNC]["К7 близость к несогласию"] = [("unc_dist", R_K7)]
+        MODEL["Н место накопления"][UNC] = {
+            "К7 базальный горизонт на несогласии": [("unc_dist", R_K7)]}
+    if V03A:
+        TAG = "_v0_3a"
+    elif V03:
         TAG = "_v0_3"
     elif PRESERVE:
         TAG += "_s"
@@ -489,6 +558,8 @@ def main() -> None:
         print(f"   звено {l}: наблюдается в {s.notna().mean():.0%} ячеек")
     print(f"   уверенность: {m.уверенность.round(1).value_counts().sort_index().to_dict()}")
     print("   разломная зона закрыла:", m.разлом_закрыл.value_counts().to_dict())
+    if m.несогласие_закрыло.notna().any():
+        print("   несогласие закрыло:", m.несогласие_закрыло.value_counts().to_dict())
     print("   ведущий объект места накопления:",
           m["объект Н место накопления"].value_counts().to_dict())
     explain(m)

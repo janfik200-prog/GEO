@@ -182,6 +182,13 @@ V03 = False
 #: * К7 (несогласие, в путях и в местах накопления): 1 → 2 км.
 #: Правило «одна поверхность — одно звено» для О2, как Ог1 для разломной зоны.
 V03A = False
+#: v0.3b (ключ --v0-3b): форма спада из литературы (полная мера, затем
+#: линейный спад до вдвое большего расстояния — как 4.5 → 9 км у К2), а
+#: масштаб — свой для листа: полная мера в ближайших `Q_CORE` ячейках по
+#: распределению канала, но не меньше ячейки (500 м). Литературные радиусы на ячейке 500 м насыщают
+#: каналы (кромки магнитного поля — мера 1 в 100 % ячеек).
+V03B = False
+Q_CORE = 0.25
 R_K2, R_K4, R_K7 = ("радиус", 1000.0, 2000.0), ("радиус", 5000.0, 10000.0), ("радиус", 1000.0, 2000.0)
 UNC = "О2 региональное несогласие"
 LBG = ROOT / "data/processed/lineament_bg.parquet"
@@ -290,6 +297,11 @@ def unconformity(cells: pd.DataFrame) -> pd.DataFrame:
 
 
 def membership(s: pd.Series, how) -> pd.Series:
+    if isinstance(how, tuple) and how[0] == "квантиль":
+        # не меньше ячейки: у магнитного поля смена знака тилта — больше чем в
+        # четверти ячеек, и квантиль даёт 0
+        core = max(float(s.quantile(how[1])), how[3])
+        how = ("радиус", core, core * how[2])
     if isinstance(how, tuple):
         # («радиус», полная, предел): 1 до полной, линейный спад до 0 к пределу (м);
         # дальше предела — 0 («наблюдается, но далеко»), пропуск остаётся пропуском
@@ -392,7 +404,7 @@ def build(df: pd.DataFrame) -> pd.DataFrame:
     links_with_unc = [l for l, o in MODEL.items() if UNC in o]
     unc_opts = links_with_unc if len(links_with_unc) > 1 else [None]
     best = None
-    for keep, keep_u in itertools.product(links_with_fault, unc_opts):
+    for keep, keep_u in itertools.product(links_with_fault or [None], unc_opts):
         skip_u = frozenset(set(links_with_unc) - {keep_u}) if keep_u else frozenset()
         sc, parts = link_scores(df, skip_fault=set(links_with_fault) - {keep}, skip_unc=skip_u)
         tot, conf = soft_and(sc)
@@ -499,19 +511,24 @@ def draw(m: pd.DataFrame) -> None:
     print(f"\nКарта: {out}")
 
 
-def main() -> None:
+def configure(argv: list[str]) -> None:
+    """Версия карты по ключам: флаги и правки MODEL (без расчёта)."""
     # Ключ --без-долин: v0.1 без dist_dnara. В v0 он вёл звено «место
     # накопления», и карта повторяла современную речную сеть (Г6: палеорельеф
     # не наблюдается; пробы по рыхлым отбирают в долинах — совпадение с ними
     # ложное).
-    global TAG, CLEAN, VARIANT, PRESERVE, V03, SECTION_HOST, V03A
-    PRESERVE = "--сохранность" in sys.argv
-    if "--v0-3a" in sys.argv:
+    global TAG, CLEAN, VARIANT, PRESERVE, V03, SECTION_HOST, V03A, V03B, R_K2, R_K4, R_K7
+    argv = list(argv)
+    PRESERVE = "--сохранность" in argv
+    if "--v0-3b" in argv:
+        V03B = True
+        argv.append("--v0-3a")
+    if "--v0-3a" in argv:
         V03A = True
-        sys.argv.append("--v0-3")
-    if "--v0-3" in sys.argv:
+        argv.append("--v0-3")
+    if "--v0-3" in argv:
         V03 = SECTION_HOST = PRESERVE = True
-        sys.argv.append("--чистые-линеаменты")
+        argv.append("--чистые-линеаменты")
         MODEL["М мобилизация"]["О7 реактивация и выщелачивание"][
             "К14 магнитный дефицит в блоке"] = [("mag_deficit", "↓")]
         MODEL["П путь"]["О2 региональное несогласие"] = {
@@ -523,18 +540,23 @@ def main() -> None:
         # предварительное, ждёт литературы и ответа ВНИГНИ.
         MODEL["Н место накопления"]["О9 складки"] = {
             "К21 антиформа кровли фундамента": [("fold_convex", "↑")]}
-    b = "--вариант-б" in sys.argv
-    if "--без-долин" in sys.argv or "--чистые-линеаменты" in sys.argv or b:
+    b = "--вариант-б" in argv
+    if "--без-долин" in argv or "--чистые-линеаменты" in argv or b:
         del MODEL["Н место накопления"]["О14 впадины"]
         TAG = "_v0_1"
-    if "--чистые-линеаменты" in sys.argv or b:
+    if "--чистые-линеаменты" in argv or b:
         # v0.2: v0.1 + линеаменты без отрезков вдоль долин
         CLEAN, TAG = True, "_v0_2"
     if b:
-        # Вариант Б поверх v0.2; О14 возвращается только с палеодолинами формулы
+        # Вариант Б поверх v0.2; О14 возвращается только с палеодолинами формулы.
+        # Слои формулы добавляются в конце — после радиусов v0.3a, иначе те
+        # затёрли бы ⚠-признаки в К2 и К7.
         VARIANT, TAG = "Б", "_v0_2_b"
-        for (link, obj, crit), fl in FORMULA.items():
-            MODEL[link].setdefault(obj, {}).setdefault(crit, []).extend(fl)
+    if V03B:
+        # нижний предел — ячейка для горизонтальных расстояний; у К7 канал под
+        # рифеем — глубина кровли (до 500 м), предел в ячейку его насыщал бы
+        R_K2 = R_K4 = ("квантиль", Q_CORE, 2.0, 500.0)
+        R_K7 = ("квантиль", Q_CORE, 2.0, 0.0)
     if V03A:
         f = MODEL["И источник"][FAULT]
         f["К2 близость к разломной зоне"] = [("lin_dist_m", R_K2)]
@@ -543,12 +565,19 @@ def main() -> None:
         MODEL["П путь"][UNC]["К7 близость к несогласию"] = [("unc_dist", R_K7)]
         MODEL["Н место накопления"][UNC] = {
             "К7 базальный горизонт на несогласии": [("unc_dist", R_K7)]}
+    if b:
+        for (link, obj, crit), fl in FORMULA.items():
+            MODEL[link].setdefault(obj, {}).setdefault(crit, []).extend(fl)
     if V03A:
-        TAG = "_v0_3a"
+        TAG = ("_v0_3b" if V03B else "_v0_3a") + ("_b" if b else "")
     elif V03:
         TAG = "_v0_3"
     elif PRESERVE:
         TAG += "_s"
+
+
+def main() -> None:
+    configure(sys.argv[1:])
     df = load()
     m = build(df)
     m.to_parquet(OUT.with_name(f"knowledge_map{TAG}.parquet"), index=False)

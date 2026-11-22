@@ -155,9 +155,25 @@ PRESERVE = False
 #:   поверхности: под чехлом, кембрием и юсмастахской свитой свита
 #:   списка теперь видна. Где разрез не восстановлен — прежняя доля по
 #:   поверхности `svk_list`.
-#: Исправленные каналы линеаментов (поправка на фон) сюда не входят — ждут
-#: решения по К1 и К21.
+#: * линеаменты с поправкой на фон (`experiments/gmo_lineaments_background.py`,
+#:   способ Г: без отрезков вдоль контактов + ранг в страте «свита ×
+#:   расчленённость»; принято руководителем 22.11.2026): К3 плотность —
+#:   прошла все критерии; К1 узлы — с пометкой «промах на пороге η²
+#:   0.055 при 0.05»; К2 близость и К5 простирание — тем же способом. Вне
+#:   страт, где линии видны (половина листа), — «не наблюдается».
+#:   К21 согласованность снят: не воспроизводится по половинам азимутов
+#:   (0.30 при стоп-правиле 0.5) — О9 складки в варианте А не наблюдаются;
+#: * О2 региональное несогласие своим каналом (раньше — только слой формулы
+#:   ⚠): К7 — насколько несогласие (кровля фундамента) далеко от
+#:   поверхности ячейки: под рифеем — глубина кровли по карте свит (не
+#:   глубже 500 м), на выходах фундамента — расстояние до ближайшего рифея;
+#:   К6 — сопряжение несогласия с разломной зоной (ранг К7 × ранг К2).
+#:   Ог1: К6 несёт разломную зону, поэтому считается только там, где
+#:   разломная зона отдана звену «путь».
 V03 = False
+LBG = ROOT / "data/processed/lineament_bg.parquet"
+LBG_MAP = {"lin_dens": "lincxrank_dens", "lin_node_dens": "lincxrank_node_dens",
+           "lin_dist": "lincxrank_dist", "lin_dir_sin": "lincb_dir_sin"}
 SECTION_HOST = False
 SVITY_GRID = ROOT / "data/processed/svity_section_grid.parquet"
 MAX_DEPTH_M = 500.0
@@ -165,7 +181,8 @@ MAX_DEPTH_M = 500.0
 
 def load() -> pd.DataFrame:
     feats = sorted({f for objs in MODEL.values() for crits in objs.values()
-                    for fl in crits.values() for f, _ in fl} - {"nw_align", "mag_deficit"})
+                    for fl in crits.values() for f, _ in fl}
+                   - {"nw_align", "mag_deficit", "unc_dist", "unc_fault"})
     if V03:
         feats = sorted(set(feats) | {"pf_mag_up1", "pf_mag_up10"})
     df = pd.read_parquet(DATA, columns=["row", "col", "x", "y", spectral_mask.BARE_COL,
@@ -184,6 +201,12 @@ def load() -> pd.DataFrame:
     # со строкой 0 на севере, а не азимут: lin_dir_sin = sin 2θ = −sin(2·азимут).
     # Отрезок СЗ–ЮВ даёт lin_dir_sin = +1 (проверено синтетическим отрезком
     # 05.11.2026). В v0–v0.2 стояло −lin_dir_sin — К5 поощрял северо-восток.
+    if V03:
+        bg = pd.read_parquet(LBG, columns=["row", "col"] + list(LBG_MAP.values()))
+        df = df.drop(columns=[c for c in LBG_MAP if c in df.columns]).merge(
+            bg.rename(columns={v: k for k, v in LBG_MAP.items()}), on=["row", "col"], how="left")
+        df = df.merge(unconformity(df[["row", "col"]]), on=["row", "col"], how="left")
+        df["unc_fault"] = (membership(df.unc_dist, "↓") * membership(df.lin_dist, "↓"))
     df["nw_align"] = df.lin_dir_sin
     if V03:
         # К14: дефицит только внутри магнитоактивного блока (медиана — по листу)
@@ -204,6 +227,24 @@ def load() -> pd.DataFrame:
     return df[df.svk_cover.fillna(0) >= 0.5].reset_index(drop=True)
 
 
+def unconformity(cells: pd.DataFrame) -> pd.DataFrame:
+    """К7 своим каналом: насколько региональное несогласие далеко от поверхности, м."""
+    from scipy.ndimage import distance_transform_edt
+    g = cells.merge(pd.read_parquet(SVITY_GRID, columns=["row", "col", "rif_thick",
+                                                         "basement_depth", "reliab"]),
+                    on=["row", "col"], how="left")
+    ok = g.reliab == 1
+    rif, base = ok & (g.rif_thick > 1), ok & (g.rif_thick <= 1)
+    nrow, ncol = int(g.row.max()) + 1, int(g.col.max()) + 1
+    grid = np.ones((nrow, ncol), bool)
+    grid[g.row[rif], g.col[rif]] = False
+    d = distance_transform_edt(grid) * 500.0
+    out = pd.Series(np.nan, index=g.index)
+    out[rif] = g.basement_depth[rif].where(g.basement_depth[rif] <= MAX_DEPTH_M)
+    out[base] = d[g.row[base], g.col[base]]
+    return pd.DataFrame({"row": g.row, "col": g.col, "unc_dist": out})
+
+
 def membership(s: pd.Series, how: str) -> pd.Series:
     if how == "доля":
         return s.clip(0, 1)
@@ -222,14 +263,20 @@ def link_scores(df: pd.DataFrame, skip_fault: set[str]) -> tuple[pd.DataFrame, d
         for obj, crits in objs.items():
             if obj == FAULT and link in skip_fault:
                 continue
+            # Ог1: К6 несёт разломную зону — только там, где она отдана этому звену
             crit_vals = [pd.concat([membership(df[f], h) for f, h in fl], axis=1).mean(axis=1)
-                         for fl in crits.values()]
+                         for c, fl in crits.items()
+                         if not (c.startswith("К6") and link in skip_fault)]
             obj_vals[obj] = pd.concat(crit_vals, axis=1).mean(axis=1)
         if obj_vals:
             t = pd.DataFrame(obj_vals)
             scores[link] = t.max(axis=1)
             if link in HOST:
                 scores[link] = np.fmin(scores[link], df[HOST[link][1]].clip(0, 1))
+                if V03:
+                    # np.fmin отбрасывает пропуск: без наблюдённого места звено
+                    # получало оценку одной вмещающей свиты. Ог4: не наблюдается.
+                    scores[link] = scores[link].where(t.notna().any(axis=1))
             seen = t.notna().any(axis=1)
             lead = pd.Series(None, index=df.index, dtype=object)
             lead[seen] = t[seen].idxmax(axis=1)
@@ -297,7 +344,16 @@ def build(df: pd.DataFrame) -> pd.DataFrame:
         if best is None:
             best = cand
         else:
-            better = cand.итог > best.итог
+            if V03:
+                # Ог1 выбирает звено для разломной зоны сначала по числу
+                # наблюдённых звеньев, потом по итогу: итог — среднее по
+                # наблюдённым, и иначе выгодно оставить звено пустым (в v0.3
+                # без складок место накопления держится только на узлах).
+                more = cand.уверенность > best.уверенность + 1e-9
+                same = (cand.уверенность - best.уверенность).abs() <= 1e-9
+                better = more | (same & (cand.итог > best.итог))
+            else:
+                better = cand.итог > best.итог
             best[better] = cand[better]
     if PRESERVE:
         s, lead, mult = preservation(df)
@@ -396,6 +452,10 @@ def main() -> None:
         sys.argv.append("--чистые-линеаменты")
         MODEL["М мобилизация"]["О7 реактивация и выщелачивание"][
             "К14 магнитный дефицит в блоке"] = [("mag_deficit", "↓")]
+        MODEL["П путь"]["О2 региональное несогласие"] = {
+            "К7 близость к несогласию": [("unc_dist", "↓")],
+            "К6 сопряжение с разломной зоной": [("unc_fault", "доля")]}
+        MODEL["Н место накопления"].pop("О9 складки", None)   # К21 снят
     b = "--вариант-б" in sys.argv
     if "--без-долин" in sys.argv or "--чистые-линеаменты" in sys.argv or b:
         del MODEL["Н место накопления"]["О14 впадины"]

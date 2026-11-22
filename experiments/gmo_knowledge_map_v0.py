@@ -172,6 +172,7 @@ PRESERVE = False
 #:   разломная зона отдана звену «путь».
 V03 = False
 LBG = ROOT / "data/processed/lineament_bg.parquet"
+SECTION_CH = ROOT / "data/processed/section_channels.parquet"
 LBG_MAP = {"lin_dens": "lincxrank_dens", "lin_node_dens": "lincxrank_node_dens",
            "lin_dist": "lincxrank_dist", "lin_dir_sin": "lincb_dir_sin"}
 SECTION_HOST = False
@@ -182,7 +183,7 @@ MAX_DEPTH_M = 500.0
 def load() -> pd.DataFrame:
     feats = sorted({f for objs in MODEL.values() for crits in objs.values()
                     for fl in crits.values() for f, _ in fl}
-                   - {"nw_align", "mag_deficit", "unc_dist", "unc_fault"})
+                   - {"nw_align", "mag_deficit", "unc_dist", "unc_fault", "fold_convex"})
     if V03:
         feats = sorted(set(feats) | {"pf_mag_up1", "pf_mag_up10"})
     df = pd.read_parquet(DATA, columns=["row", "col", "x", "y", spectral_mask.BARE_COL,
@@ -207,6 +208,8 @@ def load() -> pd.DataFrame:
             bg.rename(columns={v: k for k, v in LBG_MAP.items()}), on=["row", "col"], how="left")
         df = df.merge(unconformity(df[["row", "col"]]), on=["row", "col"], how="left")
         df["unc_fault"] = (membership(df.unc_dist, "↓") * membership(df.lin_dist, "↓"))
+        df = df.merge(pd.read_parquet(SECTION_CH, columns=["row", "col", "fold_convex"]),
+                      on=["row", "col"], how="left")
     df["nw_align"] = df.lin_dir_sin
     if V03:
         # К14: дефицит только внутри магнитоактивного блока (медиана — по листу)
@@ -455,7 +458,12 @@ def main() -> None:
         MODEL["П путь"]["О2 региональное несогласие"] = {
             "К7 близость к несогласию": [("unc_dist", "↓")],
             "К6 сопряжение с разломной зоной": [("unc_fault", "доля")]}
-        MODEL["Н место накопления"].pop("О9 складки", None)   # К21 снят
+        # К21 по линеаментам снят (не воспроизводится); складки — по форме
+        # кровли фундамента из карты свит (experiments/gmo_section_channels.py):
+        # выпуклость вверх — антиформа. Направление «замок лучше крыла» —
+        # предварительное, ждёт литературы и ответа ВНИГНИ.
+        MODEL["Н место накопления"]["О9 складки"] = {
+            "К21 антиформа кровли фундамента": [("fold_convex", "↑")]}
     b = "--вариант-б" in sys.argv
     if "--без-долин" in sys.argv or "--чистые-линеаменты" in sys.argv or b:
         del MODEL["Н место накопления"]["О14 впадины"]

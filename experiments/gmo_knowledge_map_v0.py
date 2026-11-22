@@ -191,6 +191,20 @@ V03B = False
 Q_CORE = 0.25
 R_K2, R_K4, R_K7 = ("радиус", 1000.0, 2000.0), ("радиус", 5000.0, 10000.0), ("радиус", 1000.0, 2000.0)
 UNC = "О2 региональное несогласие"
+FOLDS = "О9 складки"
+EDGE = "О1п кромки потенциальных полей"
+#: v0.3c (ключ --v0-3c, решения руководителя 22.11.2026) — v0.3b плюс:
+#: * К4 (кромки гравитационного и магнитного полей) вынесен из О1 в
+#:   отдельный объект «О1п»: внутри О1 он усреднялся с близостью к
+#:   линеаментам и не влиял на карту ни при каком радиусе. Это второе,
+#:   независимое от рельефа наблюдение разломов (по полям, а не по
+#:   линеаментам) — роли И и П; как и О1, закрывает одно звено;
+#: * кровля фундамента — одна поверхность: несогласие (О2) и складки (О9)
+#:   построены по ней (глубина и выпуклость) и вместе закрывают одно
+#:   звено — «путь» или «место накопления». Палеопонижения (К28г) с той же
+#:   поверхности остаются в звене «сохранность»: оно фильтр и в итог не
+#:   входит.
+V03C = False
 LBG = ROOT / "data/processed/lineament_bg.parquet"
 SECTION_CH = ROOT / "data/processed/section_channels.parquet"
 LBG_MAP = {"lin_dens": "lincxrank_dens", "lin_node_dens": "lincxrank_node_dens",
@@ -317,21 +331,24 @@ def membership(s: pd.Series, how) -> pd.Series:
 
 
 def link_scores(df: pd.DataFrame, skip_fault: set[str],
-                skip_unc: frozenset = frozenset()) -> tuple[pd.DataFrame, dict]:
+                skip_unc: frozenset = frozenset(),
+                skip: dict | None = None) -> tuple[pd.DataFrame, dict]:
     """Оценки звеньев; `skip_fault` / `skip_unc` — звенья, где разломная зона /
-    несогласие не считается (одна поверхность — одно звено)."""
+    несогласие не считается (одна поверхность — одно звено); `skip` —
+    объект → звенья, где он не считается (общий случай для v0.3c)."""
+    skip = dict(skip or {})
+    skip.setdefault(FAULT, set()).update(skip_fault)
+    skip.setdefault(UNC, set()).update(skip_unc)
     scores, parts = {}, {}
     for link, objs in MODEL.items():
         obj_vals = {}
         for obj, crits in objs.items():
-            if obj == FAULT and link in skip_fault:
-                continue
-            if obj == UNC and link in skip_unc:
+            if link in skip.get(obj, ()):
                 continue
             # Ог1: К6 несёт разломную зону — только там, где она отдана этому звену
             crit_vals = [pd.concat([membership(df[f], h) for f, h in fl], axis=1).mean(axis=1)
                          for c, fl in crits.items()
-                         if not (c.startswith("К6") and link in skip_fault)]
+                         if not (c.startswith("К6") and link in skip[FAULT])]
             obj_vals[obj] = pd.concat(crit_vals, axis=1).mean(axis=1)
         if obj_vals:
             t = pd.DataFrame(obj_vals)
@@ -400,16 +417,32 @@ def preservation(df: pd.DataFrame) -> tuple[pd.Series, pd.Series, pd.Series]:
 
 def build(df: pd.DataFrame) -> pd.DataFrame:
     import itertools
-    links_with_fault = [l for l, o in MODEL.items() if FAULT in o]
-    links_with_unc = [l for l, o in MODEL.items() if UNC in o]
-    unc_opts = links_with_unc if len(links_with_unc) > 1 else [None]
+    # Группы «один объект (одна поверхность) — одно звено»: Ог1 для разломной
+    # зоны; в v0.3a — несогласие; в v0.3c — кромки полей отдельно и кровля
+    # фундамента (несогласие + складки) как одна поверхность.
+    groups = {"разлом": {FAULT}, "несогласие": {UNC}}
+    if V03C:
+        groups = {"разлом": {FAULT}, "кромки": {EDGE}, "поверхность": {UNC, FOLDS}}
+    opts = {}
+    for gname, objs in groups.items():
+        links = [l for l, o in MODEL.items() if objs & set(o)]
+        opts[gname] = (links, links if (gname == "разлом" or len(links) > 1) else [None])
     best = None
-    for keep, keep_u in itertools.product(links_with_fault or [None], unc_opts):
-        skip_u = frozenset(set(links_with_unc) - {keep_u}) if keep_u else frozenset()
-        sc, parts = link_scores(df, skip_fault=set(links_with_fault) - {keep}, skip_unc=skip_u)
+    for combo in itertools.product(*[o[1] or [None] for o in opts.values()]):
+        skip = {}
+        for (gname, (links, _)), keep in zip(opts.items(), combo):
+            if keep is None:
+                continue
+            for obj in groups[gname]:
+                skip.setdefault(obj, set()).update(set(links) - {keep})
+        sc, parts = link_scores(df, skip_fault=skip.get(FAULT, set()), skip=skip)
         tot, conf = soft_and(sc)
-        cand = sc.add_prefix("звено ").assign(итог=tot, уверенность=conf, разлом_закрыл=keep,
-                                              несогласие_закрыло=keep_u)
+        names = dict(zip(opts, combo))
+        cand = sc.add_prefix("звено ").assign(итог=tot, уверенность=conf,
+                                              разлом_закрыл=names.get("разлом"),
+                                              несогласие_закрыло=names.get("несогласие",
+                                                                           names.get("поверхность")),
+                                              кромки_закрыли=names.get("кромки"))
         for l in MODEL:
             cand[f"объект {l}"] = parts[l]
         if best is None:
@@ -517,8 +550,11 @@ def configure(argv: list[str]) -> None:
     # накопления», и карта повторяла современную речную сеть (Г6: палеорельеф
     # не наблюдается; пробы по рыхлым отбирают в долинах — совпадение с ними
     # ложное).
-    global TAG, CLEAN, VARIANT, PRESERVE, V03, SECTION_HOST, V03A, V03B, R_K2, R_K4, R_K7
+    global TAG, CLEAN, VARIANT, PRESERVE, V03, SECTION_HOST, V03A, V03B, V03C, R_K2, R_K4, R_K7
     argv = list(argv)
+    if "--v0-3c" in argv:
+        V03C = True
+        argv.append("--v0-3b")
     PRESERVE = "--сохранность" in argv
     if "--v0-3b" in argv:
         V03B = True
@@ -565,11 +601,15 @@ def configure(argv: list[str]) -> None:
         MODEL["П путь"][UNC]["К7 близость к несогласию"] = [("unc_dist", R_K7)]
         MODEL["Н место накопления"][UNC] = {
             "К7 базальный горизонт на несогласии": [("unc_dist", R_K7)]}
+    if V03C:
+        k4 = MODEL["И источник"][FAULT].pop("К4 разломные границы в полях")
+        for link in ("И источник", "П путь"):
+            MODEL[link][EDGE] = {"К4 разломные границы в полях": list(k4)}
     if b:
         for (link, obj, crit), fl in FORMULA.items():
             MODEL[link].setdefault(obj, {}).setdefault(crit, []).extend(fl)
     if V03A:
-        TAG = ("_v0_3b" if V03B else "_v0_3a") + ("_b" if b else "")
+        TAG = ("_v0_3c" if V03C else "_v0_3b" if V03B else "_v0_3a") + ("_b" if b else "")
     elif V03:
         TAG = "_v0_3"
     elif PRESERVE:
@@ -588,7 +628,9 @@ def main() -> None:
     print(f"   уверенность: {m.уверенность.round(1).value_counts().sort_index().to_dict()}")
     print("   разломная зона закрыла:", m.разлом_закрыл.value_counts().to_dict())
     if m.несогласие_закрыло.notna().any():
-        print("   несогласие закрыло:", m.несогласие_закрыло.value_counts().to_dict())
+        print("   несогласие (поверхность) закрыло:", m.несогласие_закрыло.value_counts().to_dict())
+    if m.кромки_закрыли.notna().any():
+        print("   кромки полей закрыли:", m.кромки_закрыли.value_counts().to_dict())
     print("   ведущий объект места накопления:",
           m["объект Н место накопления"].value_counts().to_dict())
     explain(m)

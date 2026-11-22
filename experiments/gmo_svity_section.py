@@ -66,6 +66,10 @@
   `rif_thick` (мощность сохранившегося рифея, м), `basement_depth` (глубина
   до фундамента, м), `under_cambrian`, `surf_model`, `surf_map`, `misfit_m`,
   `reliab` (0 — вне карты, 1 — восстановлено, 2 — не восстанавливается);
+  срез 500 м (`MAX_DEPTH_M`, ответ ВНИГНИ 19.11): `*_in500` (1 есть не глубже
+  среза, 0 нет, NaN глубже или не восстановлено), `basement_elev` (высота
+  кровли фундамента, м), `basement_resid_m` (её отклонение от региональной
+  плоскости, м; меньше нуля — палеопонижение; глубже среза NaN);
 * рисунки `outputs/13_генетическая_модель/gmo_svity_section_*.png`: карта
   распределения свит, разрезы, мощность рифея, остатки.
 
@@ -111,6 +115,11 @@ BLOCK_M, N_FOLD = 10_000.0, 5
 HUBER_M = 50.0
 MISFIT_M, MISFIT_WIN = 30.0, 25  # порог и окно (пикс. 100 м) для «не восстанавливается»
 PAIR_R = 4000.0                  # радиус пар близких точек, м
+#: Срез по глубине (ответ ВНИГНИ 19.11.2026, вопрос 10: «глубоко лезть не
+#: стоит. Максимум метров 500»). Глубже среза свита и кровля фундамента
+#: «не наблюдаются» (NaN в колонках *_in500, basement_resid_m), а не «нет»;
+#: полные глубины остаются в таблице как оценка.
+MAX_DEPTH_M = 500.0
 t0 = time.time()
 rng = np.random.default_rng(13)
 
@@ -476,6 +485,7 @@ def build_grid(meta, dem, lab, ds, f, off, cm_plane, misfit) -> pd.DataFrame:
         cols[f"{key}_thick"] = cell_mean(zt - zb, meta)
     cols["rif_thick"] = cell_mean(np.clip(top - f, 0, None), meta)
     cols["basement_depth"] = cell_mean(np.clip(dem - f, 0, None), meta)
+    cols["basement_elev"] = cell_mean(f, meta)
     cols["under_cambrian"] = cell_mean(is_cm.astype(float), meta) >= 0.5
     cols["misfit_m"] = cell_mean(misfit, meta)
     pred = surf_class(dem - f, off)
@@ -500,13 +510,31 @@ def build_grid(meta, dem, lab, ds, f, off, cm_plane, misfit) -> pd.DataFrame:
         absent = ~(g[f"{key}_share"] >= 0.5)
         g.loc[bad | absent, [f"{key}_top_depth", f"{key}_bot_depth", f"{key}_thick"]] = np.nan
         g.loc[bad, f"{key}_share"] = np.nan
-    g.loc[bad, ["rif_thick", "basement_depth"]] = np.nan
+    g.loc[bad, ["rif_thick", "basement_depth", "basement_elev"]] = np.nan
     g.loc[bad, "surf_model"] = "нет"
+    # Срез 500 м: 1 — свита есть и её кровля не глубже среза, 0 — свиты нет
+    # (размыта или не отлагалась), NaN — глубже среза или разрез не восстановлен.
+    for key in SV:
+        v = g[f"{key}_present"].astype(float)
+        v[g[f"{key}_present"] & (g[f"{key}_top_depth"] > MAX_DEPTH_M)] = np.nan
+        v[bad] = np.nan
+        g[f"{key}_in500"] = v
+    # Палеопонижения кровли фундамента (ответ ВНИГНИ 19.11, вопрос 2: золото
+    # сохраннее «там, где были понижения и лакуны, в которые легли рифейские
+    # породы»): высота кровли минус региональная плоскость по надёжным ячейкам,
+    # м; меньше нуля — понижение. Масштаб — десятки километров (гибкость
+    # поверхности), понижения мельче ~10 км не видны. Глубже среза — NaN.
+    ok = ~bad & g.basement_elev.notna()
+    A = np.c_[np.ones(ok.sum()), g.x[ok], g.y[ok]]
+    co = np.linalg.lstsq(A, g.basement_elev[ok], rcond=None)[0]
+    g["basement_resid_m"] = g.basement_elev - (co[0] + co[1] * g.x + co[2] * g.y)
+    g.loc[bad | (g.basement_depth > MAX_DEPTH_M), "basement_resid_m"] = np.nan
     order = ["row", "col", "x", "y"]
     for key in SV:
         order += [f"{key}_{s}" for s in ("present", "share", "top_depth", "bot_depth", "thick")]
-    order += ["rif_thick", "basement_depth", "under_cambrian", "surf_model", "surf_map",
-              "misfit_m", "reliab"]
+    order += [f"{key}_in500" for key in SV]
+    order += ["rif_thick", "basement_depth", "basement_elev", "basement_resid_m",
+              "under_cambrian", "surf_model", "surf_map", "misfit_m", "reliab"]
     return g[order]
 
 
@@ -547,8 +575,9 @@ def grey(ax, lon, lat, g, meta) -> None:
 
 
 DEPTH_EDGES = [0, 50, 150, 300, 500, 2000]
-DEPTH_COLORS = ["#c6dbef", "#9ecae1", "#6baed6", "#3182bd", "#08306b"]
-DEPTH_LABELS = ["до 50 м", "50–150 м", "150–300 м", "300–500 м", "глубже 500 м"]
+DEPTH_COLORS = ["#c6dbef", "#9ecae1", "#6baed6", "#3182bd", "#d9d9d9"]
+DEPTH_LABELS = ["до 50 м", "50–150 м", "150–300 м", "300–500 м",
+                "глубже 500 м —\nне оценивается"]
 
 
 def draw_distribution(g, meta, origin) -> Path:
@@ -909,6 +938,16 @@ def main() -> None:
                      "мощность, м (медиана)": round(float(g.loc[p, f"{key}_thick"].median()), 0)})
     summ = pd.DataFrame(summ)
     print(summ.to_string(index=False))
+    in500 = {SV[k][0]: round(100 * float((g[f"{k}_in500"] == 1).sum() / ok.sum()), 1) for k in SV}
+    deep = {SV[k][0]: round(100 * float((g[f"{k}_present"] & g[f"{k}_in500"].isna()).sum()
+                                        / ok.sum()), 1) for k in SV}
+    print(f"   срез {MAX_DEPTH_M:.0f} м — свита есть не глубже среза, % площади: {in500}; "
+          f"глубже среза (не оценивается): {deep}")
+    print(f"   кровля фундамента не глубже среза: {100 * (g.basement_depth[ok] <= MAX_DEPTH_M).mean():.1f}% "
+          f"площади; отклонение от плоскости там: 5–95% "
+          f"{g.basement_resid_m.quantile(0.05):.0f}…{g.basement_resid_m.quantile(0.95):.0f} м")
+    checks["срез 500 м"] = {"свита не глубже среза": in500, "глубже среза": deep,
+                           "фундамент не глубже среза": float((g.basement_depth[ok] <= MAX_DEPTH_M).mean())}
     print(f"   мощность сохранившегося рифея: медиана {g.rif_thick[ok].median():.0f} м, "
           f"наибольшая {g.rif_thick[ok].max():.0f} м; рифея нет (фундамент на поверхности) — "
           f"{100 * (g.rif_thick[ok] <= 1).mean():.1f}% площади; глубина до фундамента: медиана "

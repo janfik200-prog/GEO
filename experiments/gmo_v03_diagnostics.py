@@ -62,8 +62,9 @@ def without(model: dict, link: str | None, obj: str, crit: str | None = None) ->
 
 
 def main() -> None:
-    ver = "--v0-3b" if "--v0-3b" in sys.argv else "--v0-3a"
-    km.configure([ver])
+    ver = next((a for a in sys.argv[1:] if a.startswith("--v0-3")), "--v0-3a")
+    branch_b = "--вариант-б" in sys.argv
+    km.configure([ver] + (["--вариант-б"] if branch_b else []))
     df = km.load()
     meta, prog = criterial_target.load_prognoz_grid()
     vn = -np.asarray(prog, dtype=float).reshape(meta.prf, meta.pic)[df.row, df.col]
@@ -72,8 +73,17 @@ def main() -> None:
     cases = [("полная карта", base),
              ("без несогласия (О2)", without(base, None, km.UNC)),
              ("без складок (О9)", without(base, None, "О9 складки")),
-             ("без кромок полей (К4)", without(base, None, km.FAULT, "К4 разломные границы в полях")),
+             ("без кромок полей (К4)", without(base, None, km.FAULT, "К4 разломные границы в полях")
+              if not km.V03C else without(base, None, km.EDGE)),
              ("без разломной зоны (О1)", without(base, None, km.FAULT))]
+    if branch_b:
+        cases += [("без интрузий (О4, ⚠ магматиты)", without(base, None, "О4 интрузии")),
+                  ("без кор (О10, ⚠)", without(base, None, "О10 коры выветривания")),
+                  ("без фаций (О13, ⚠)", without(base, None, "О13 грубообломочные фации")),
+                  ("без палеодолин (О14, ⚠)", without(base, None, "О14 впадины")),
+                  ("без коры + фаций + палеодолин", without(without(without(
+                      base, None, "О10 коры выветривания"), None, "О13 грубообломочные фации"),
+                      None, "О14 впадины"))]
     rows, full = [], None
     for name, model in cases:
         km.MODEL.clear()
@@ -89,10 +99,10 @@ def main() -> None:
                      "верх у контакта, %": round(100 * (top & near).sum() / top.sum()),
                      "ρ с ВНИГНИ": round(spearmanr(r[ok], vn[ok]).statistic, 2)})
     t = pd.DataFrame(rows)
-    print(f"Версия {ver[2:]}; полоса у контакта — {100 * near.mean():.0f}% листа "
+    print(f"Версия {ver[2:]}{' вариант Б' if branch_b else ''}; полоса у контакта — {100 * near.mean():.0f}% листа "
           f"(случайный верх попал бы туда на столько же)")
     print(t.to_string(index=False))
-    out = ROOT / f"data/processed/v03_diagnostics_{ver[2:].replace('-', '_')}.csv"
+    out = ROOT / f"data/processed/v03_diagnostics_{ver[2:].replace('-', '_')}{'_b' if branch_b else ''}.csv"
     t.to_csv(out, index=False, encoding="utf-8-sig")
     print(f"Таблица: {out}")
 

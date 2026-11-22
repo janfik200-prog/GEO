@@ -85,28 +85,30 @@ def eta2(v: pd.Series, grp: pd.Series) -> float:
     return float(r.groupby(grp[ok]).transform("mean").var() / r.var())
 
 
-def main() -> None:
-    g = pd.read_parquet(GRID)
+def fold_channels(g: pd.DataFrame, sigma_m: float = SIGMA_M) -> pd.DataFrame:
+    """Выпуклость кровли фундамента (м/км²) и крутизна крыла (°) по ячейкам."""
     shape = (int(g.row.max()) + 1, int(g.col.max()) + 1)
     ok = g.reliab == 1
     z = to_img(g.assign(z=g.basement_elev.where(ok)), "z", shape)
     known = np.isfinite(z)
     _, (ir, ic) = ndimage.distance_transform_edt(~known, return_indices=True)
-    zf = ndimage.gaussian_filter(z[ir, ic], SIGMA_M / CELL)
-    lap = ndimage.laplace(zf) / (CELL / 1000.0) ** 2          # м на км²
+    zf = ndimage.gaussian_filter(z[ir, ic], sigma_m / CELL)
+    lap = ndimage.laplace(zf) / (CELL / 1000.0) ** 2
     gy, gx = np.gradient(zf, CELL)
     slope = np.degrees(np.arctan(np.hypot(gx, gy)))
-    # Свиты лежат согласно и мощности постоянны: все границы — кровля плюс
-    # постоянная, изгиб у них один. Поэтому складки видны на любой глубине,
-    # и срез 500 м к ним не применяется. Краевая полоса 2·SIGMA от
-    # невосстановленных ячеек и рамки отброшена — там изгиб создаёт
-    # заполнение пропусков, а не данные.
     pad = np.pad(known, 1, constant_values=False)
     edge = ndimage.distance_transform_edt(pad)[1:-1, 1:-1] * CELL
-    inside = known & (edge > 2 * SIGMA_M)
+    inside = known & (edge > 2 * sigma_m)
     out = g[["row", "col"]].copy()
     out["fold_convex"] = np.where(inside, -lap, np.nan)[g.row, g.col]
     out["fold_slope"] = np.where(inside, slope, np.nan)[g.row, g.col]
+    return out
+
+
+def main() -> None:
+    g = pd.read_parquet(GRID)
+    shape = (int(g.row.max()) + 1, int(g.col.max()) + 1)
+    out = fold_channels(g)
     il = g.il_present & (g.il_bot_depth <= MAX_DEPTH_M)
     out["il_base_depth"] = g.il_bot_depth.where(il)
     out["discord_m"] = g.misfit_m.where(g.reliab > 0)

@@ -74,14 +74,15 @@ def main() -> None:
                           Patch(color="#1f77b4", label="только у нашей"),
                           Patch(color="#d62728", label="только у ВНИГНИ"),
                           Patch(color="#eeeeee", label="ни у одной")],
-                 loc="lower left", fontsize=10, framealpha=0.95)
+                 loc="upper center", bbox_to_anchor=(0.5, -0.02), ncol=2, fontsize=10,
+                 frameon=False)
     for a in ax:
         a.set_xticks([]); a.set_yticks([])
     fig.suptitle(f"Лист R-48-XI,XII, сетка 500 м, север сверху. Ранговая корреляция {rho:+.2f}; "
                  f"верхние {TOP:.0%} совпадают на {share:.0%} (случайно — {TOP:.0%}). "
                  "Карта ВНИГНИ — заверка, не мишень", fontsize=12)
     fig.colorbar(plt.cm.ScalarMappable(cmap=cm), ax=ax[2], shrink=0.8).remove()   # та же ширина панели
-    fig.tight_layout(rect=(0, 0, 1, 0.93))
+    fig.tight_layout(rect=(0, 0.06, 1, 0.93))
     out = outputs.png(f"gmo_map_vs_vnigni_{ver}.png")
     mapstyle.save_fig(fig, out, dpi=120)
     print(f"Рисунок: {out}")

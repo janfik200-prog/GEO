@@ -12,8 +12,12 @@
 (б) верхние 20 % совпадают с базовыми не меньше чем на 70 %. Соседние
 значения: доля 15 и 35 %; спад 1.5 и 3; сглаживание 1 и 4 км.
 
-Порог видимости линеаментов (страта, где линий меньше `MIN_SEEN`) здесь
-не проверяется: его смена требует пересчёта линеаментов (несколько часов).
+Порог видимости линеаментов (`MIN_SEEN` = 5 %: страта «свита × квинтиль
+расчленённости» наблюдаема, если линии есть хотя бы в такой доле её ячеек)
+проверяется значениями 2.5 и 10 %. Пересчитывать линии не нужно: порог
+работает только при ранжировании уже посчитанных каналов способа Г
+(`experiments/gmo_lineaments_background.py::rank_method`), здесь это
+ранжирование повторено.
 
 Карта ВНИГНИ и золото не используются: проверяется только сама карта.
 
@@ -42,14 +46,34 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 TOP, RHO_MIN, TOP_MIN = 0.2, 0.9, 0.70
 
 
-def build(df: pd.DataFrame, argv: list[str], q=None, spread=None, sigma=None) -> pd.Series:
+def visibility(df: pd.DataFrame, min_seen: float) -> pd.DataFrame:
+    """Способ Г с другим порогом видимости: ранги в страте и маска наблюдаемости."""
+    from experiments import gmo_lineaments_background as bgm
+    bg = pd.read_parquet(bgm.OUT, columns=["row", "col", "bg_relief_q", "lincx_dens",
+                                            "lincx_node_dens", "lincx_dist"])
+    bg = bg.merge(pd.read_parquet(bgm.K23, columns=["row", "col", "svk_main"]),
+                  on=["row", "col"], how="left")
+    strata = bg.svk_main.astype(str) + "|" + bg.bg_relief_q.astype(str)
+    obs = (bg.lincx_dens > 0).groupby(strata).transform("mean") >= min_seen
+    new = bg[["row", "col"]].copy()
+    for ch, col in (("dens", "lin_dens"), ("node_dens", "lin_node_dens"), ("dist", "lin_dist")):
+        new[col] = bg[f"lincx_{ch}"].groupby(strata).rank(pct=True).where(obs)
+    lc = pd.read_parquet(km.LINC, columns=["row", "col", "linc_dist"])
+    new = new.merge(lc, on=["row", "col"], how="left")
+    new["lin_dist_m"] = new.linc_dist.where(obs.to_numpy())
+    d = df.drop(columns=["lin_dens", "lin_node_dens", "lin_dist", "lin_dist_m"])
+    return d.merge(new.drop(columns="linc_dist"), on=["row", "col"], how="left")
+
+
+def build(df: pd.DataFrame, argv: list[str], q=None, spread=None, sigma=None,
+          min_seen=None) -> pd.Series:
     mod = importlib.reload(km)
     if q is not None:
         mod.Q_CORE = q
     if spread is not None:
         mod.SPREAD = spread
     mod.configure(argv)
-    d = df.copy()
+    d = visibility(df, min_seen) if min_seen is not None else df.copy()
     d["unc_fault"] = mod.membership(d.unc_dist, mod.R_K7) * mod.membership(d.lin_dist_m, mod.R_K2)
     if sigma is not None:
         g = pd.read_parquet(sec.GRID)
@@ -70,7 +94,9 @@ def main() -> None:
     for name, kw in [("доля полной меры 15 %", {"q": 0.15}), ("доля полной меры 35 %", {"q": 0.35}),
                      ("спад до ×1.5", {"spread": 1.5}), ("спад до ×3", {"spread": 3.0}),
                      ("сглаживание складок 1 км", {"sigma": 1000.0}),
-                     ("сглаживание складок 4 км", {"sigma": 4000.0})]:
+                     ("сглаживание складок 4 км", {"sigma": 4000.0}),
+                     ("видимость линий 2.5 %", {"min_seen": 0.025}),
+                     ("видимость линий 10 %", {"min_seen": 0.10})]:
         it = build(df, argv, **kw)
         r = it.rank(pct=True)
         rho = spearmanr(it, base, nan_policy="omit").statistic
@@ -80,7 +106,7 @@ def main() -> None:
                      "устойчиво": "да" if rho >= RHO_MIN and share >= TOP_MIN else "нет"})
         print(rows[-1], flush=True)
     t = pd.DataFrame(rows)
-    print(f"\nВетка {'Б' if len(argv) > 1 else 'А'}, база v0.3c (доля 25 %, спад ×2, сглаживание 2 км); "
+    print(f"\nВетка {'Б' if len(argv) > 1 else 'А'}, база v0.3c (доля 25 %, спад ×2, сглаживание 2 км, видимость 5 %); "
           f"порог: ρ ≥ {RHO_MIN}, верх ≥ {TOP_MIN:.0%}")
     print(t.to_string(index=False))
     out = ROOT / f"data/processed/v03_stability{'_b' if len(argv) > 1 else ''}.csv"

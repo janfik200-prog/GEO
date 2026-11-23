@@ -206,6 +206,21 @@ EDGE = "О1п кромки потенциальных полей"
 #:   поверхности остаются в звене «сохранность»: оно фильтр и в итог не
 #:   входит.
 V03C = False
+#: v0.3d (ключ --v0-3d, 23.11.2026) — v0.3c плюс то, что модель заполнила сама:
+#: * О8 палеорельеф, К20 (М/II): кровля фундамента из карты свит — это рельеф
+#:   перед отложением рифея. Г6 доказала лишь, что современный рельеф его не
+#:   повторяет. Денудация высвобождает золото на палеоподнятиях: канал —
+#:   превышение кровли над региональной плоскостью (`basement_resid_m`, ↑),
+#:   только где кровля не глубже 500 м. Та же поверхность, что у несогласия и
+#:   складок, — входит в ту же группу Ог1а (одно звено на поверхность);
+#: * О3 локальные несогласия, К8 (Н/III) — кандидат: несогласие выходов свит с
+#:   согласным пологим залеганием (`discord_m`, ↑). Не отличает несогласие от
+#:   разлома со смещением и от смены мощности (вопрос к ВНИГНИ).
+#: Кварцевые жилы по индексам ASTER TIR не добавлены: `astir_qi/ci` проверены
+#: 06.08.2026 (src/aster_tir.py) — повторяют растительность и уклон, геологии нет.
+V03D = False
+PALEO = "О8 палеорельеф"
+LOCAL_UNC = "О3 локальные несогласия (кандидат)"
 LBG = ROOT / "data/processed/lineament_bg.parquet"
 SECTION_CH = ROOT / "data/processed/section_channels.parquet"
 LBG_MAP = {"lin_dens": "lincxrank_dens", "lin_node_dens": "lincxrank_node_dens",
@@ -218,7 +233,8 @@ MAX_DEPTH_M = 500.0
 def load() -> pd.DataFrame:
     feats = sorted({f for objs in MODEL.values() for crits in objs.values()
                     for fl in crits.values() for f, _ in fl}
-                   - {"nw_align", "mag_deficit", "unc_dist", "unc_fault", "fold_convex",
+                   - {"nw_align", "mag_deficit", "unc_dist", "unc_fault", "fold_convex", "discord_m",
+                      "basement_resid_m",
                       "lin_dist_m", "edge_gr_m", "edge_mag_m"})
     if V03A:
         feats = sorted(set(feats) | {"pf_gr_tdr", "pf_mag_tdr"})
@@ -246,7 +262,10 @@ def load() -> pd.DataFrame:
             bg.rename(columns={v: k for k, v in LBG_MAP.items()}), on=["row", "col"], how="left")
         df = df.merge(unconformity(df[["row", "col"]]), on=["row", "col"], how="left")
         df["unc_fault"] = (membership(df.unc_dist, "↓") * membership(df.lin_dist, "↓"))
-        df = df.merge(pd.read_parquet(SECTION_CH, columns=["row", "col", "fold_convex"]),
+        df = df.merge(pd.read_parquet(SECTION_CH, columns=["row", "col", "fold_convex",
+                                                           "discord_m"]),
+                      on=["row", "col"], how="left")
+        df = df.merge(pd.read_parquet(SVITY_GRID, columns=["row", "col", "basement_resid_m"]),
                       on=["row", "col"], how="left")
         if V03A:
             obs = pd.read_parquet(LBG, columns=["row", "col", "bg_observed_x"])
@@ -423,7 +442,7 @@ def build(df: pd.DataFrame) -> pd.DataFrame:
     # фундамента (несогласие + складки) как одна поверхность.
     groups = {"разлом": {FAULT}, "несогласие": {UNC}}
     if V03C:
-        groups = {"разлом": {FAULT}, "кромки": {EDGE}, "поверхность": {UNC, FOLDS}}
+        groups = {"разлом": {FAULT}, "кромки": {EDGE}, "поверхность": {UNC, FOLDS, PALEO}}
     opts = {}
     for gname, objs in groups.items():
         links = [l for l, o in MODEL.items() if objs & set(o)]
@@ -551,8 +570,11 @@ def configure(argv: list[str]) -> None:
     # накопления», и карта повторяла современную речную сеть (Г6: палеорельеф
     # не наблюдается; пробы по рыхлым отбирают в долинах — совпадение с ними
     # ложное).
-    global TAG, CLEAN, VARIANT, PRESERVE, V03, SECTION_HOST, V03A, V03B, V03C, R_K2, R_K4, R_K7
+    global TAG, CLEAN, VARIANT, PRESERVE, V03, SECTION_HOST, V03A, V03B, V03C, V03D, R_K2, R_K4, R_K7
     argv = list(argv)
+    if "--v0-3d" in argv:
+        V03D = True
+        argv.append("--v0-3c")
     if "--v0-3c" in argv:
         V03C = True
         argv.append("--v0-3b")
@@ -602,6 +624,11 @@ def configure(argv: list[str]) -> None:
         MODEL["П путь"][UNC]["К7 близость к несогласию"] = [("unc_dist", R_K7)]
         MODEL["Н место накопления"][UNC] = {
             "К7 базальный горизонт на несогласии": [("unc_dist", R_K7)]}
+    if V03D:
+        MODEL["М мобилизация"][PALEO] = {"К20 палеоподнятие кровли фундамента":
+                                         [("basement_resid_m", "↑")]}
+        MODEL["Н место накопления"][LOCAL_UNC] = {"К8 несогласное залегание выходов свит":
+                                                  [("discord_m", "↑")]}
     if V03C:
         k4 = MODEL["И источник"][FAULT].pop("К4 разломные границы в полях")
         for link in ("И источник", "П путь"):
@@ -610,7 +637,7 @@ def configure(argv: list[str]) -> None:
         for (link, obj, crit), fl in FORMULA.items():
             MODEL[link].setdefault(obj, {}).setdefault(crit, []).extend(fl)
     if V03A:
-        TAG = ("_v0_3c" if V03C else "_v0_3b" if V03B else "_v0_3a") + ("_b" if b else "")
+        TAG = ("_v0_3d" if V03D else "_v0_3c" if V03C else "_v0_3b" if V03B else "_v0_3a") + ("_b" if b else "")
     elif V03:
         TAG = "_v0_3"
     elif PRESERVE:

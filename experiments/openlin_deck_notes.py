@@ -18,8 +18,8 @@ from pathlib import Path
 
 from pptx import Presentation
 
-SRC = Path("presentation/Линеаменты по космоснимкам.pptx")
-MD = Path("presentation/Текст доклада.md")
+SRC = Path("presentation/2026-09_10_линеаменты_по_космоснимкам/Линеаменты по космоснимкам.pptx")
+MD = Path("presentation/2026-09_10_линеаменты_по_космоснимкам/Текст доклада.md")
 
 #: Заголовок слайда и что на нём говорить. Порядок — как в презентации.
 TALK: list[tuple[str, str]] = [

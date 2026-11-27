@@ -46,12 +46,19 @@ def rel_window(a, valid):
 
 
 def line_features(site, pool, img, dem, valid, log):
+    raw = np.load(DEM / f"dem_alos30_{site}_лист_20m.npy").astype("float64")[:valid.shape[0], :valid.shape[1]]
+    return line_features_arr(pool, img, dem, raw, valid, log, site=site)
+
+
+def line_features_arr(pool, img, dem, alos_raw, valid, log, site: str = "массивы") -> np.ndarray:
+    """20 признаков линии по массивам в памяти (SYN1). alos_raw — ALOS 20 м как есть (с NaN), обрезан
+    до valid.shape; site — только подпись в журнале."""
     from scipy.stats import norm, rankdata
     Z = zmaps(img, dem, valid)
     gy, gx = np.gradient(dem, RES_IN)
     slope = np.degrees(np.arctan(np.hypot(gx, gy))).astype("float32")
     rel_e, rel_b = rel_window(dem, valid), rel_window(img, valid)
-    raw = np.load(DEM / f"dem_alos30_{site}_лист_20m.npy").astype("float64")[:valid.shape[0], :valid.shape[1]]
+    raw = np.asarray(alos_raw, dtype="float64")
     miss = ~np.isfinite(raw)
     alos = np.where(miss, np.nanmedian(raw), raw)
     za = [C2.local_norm_nz(C1.ridge_dir(alos, DEM_SIG_M, s)[0], valid) for s in (+1, -1)]

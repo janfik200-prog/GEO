@@ -26,7 +26,7 @@ from experiments.md_to_docx import convert
 from experiments.openlin_formulas import F_SIZE, INK, SURF
 
 OUT = Path("outputs/formulas")
-MD = Path("presentation/Формулы и обозначения.md")
+MD = Path("presentation/2026-10-14_для_геофизиков/Формулы и обозначения.md")
 
 #: Ширина картинки формулы, дюймы. В документе она ужимается до ширины полосы
 #: (6.3"), поэтому запас по ширине здесь только ради чёткости на печати.
@@ -1175,7 +1175,7 @@ SECTIONS: list[tuple[str, str, list[dict]]] = [
 
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
-    rel = Path("..") / OUT                      # md лежит в presentation/
+    rel = Path("../..") / OUT                   # md лежит в presentation/2026-10-14_для_геофизиков/
 
     lines = ["# Линеаменты по космоснимкам: формулы и обозначения", ""]
     lines += [p for para in INTRO for p in (para, "")]

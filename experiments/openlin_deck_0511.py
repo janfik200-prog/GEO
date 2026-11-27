@@ -17,7 +17,7 @@ from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
 from pptx.util import Inches, Pt, Emu
 
 IMG = Path("outputs/deck_img")        # картинки к слайдам (outputs/ не в git)
-OUT = Path("presentation/Доклад_линеаменты_05_11.pptx")
+OUT = Path("presentation/2026-11-05_доклад/Доклад_линеаменты_05_11.pptx")
 
 DARK = RGBColor(0x1E, 0x2B, 0x2F)
 LIGHT = RGBColor(0xFF, 0xFF, 0xFF)

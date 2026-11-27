@@ -26,8 +26,8 @@ from pptx import Presentation
 from pptx.oxml import parse_xml
 from pptx.oxml.ns import nsdecls
 
-SRC = Path("presentation/Линеаменты по космоснимкам.pptx")
-MD = Path("presentation/Текст доклада (новая версия).md")
+SRC = Path("presentation/2026-09_10_линеаменты_по_космоснимкам/Линеаменты по космоснимкам.pptx")
+MD = Path("presentation/2026-09_10_линеаменты_по_космоснимкам/Текст доклада (новая версия).md")
 
 #: Плейсхолдер заметок для слайдов, собранных программой: в мастере заметок
 #: этого файла его нет, а без него python-pptx не даёт вписать текст.

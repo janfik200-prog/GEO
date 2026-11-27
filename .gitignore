@@ -39,3 +39,9 @@ experiments/_scratch/
 CLAUDE.md
 CLAUDE.local.md
 .claude/
+
+# рабочие файлы плагина superpowers (журнал, задания, ревью)
+.superpowers/
+
+# материалы от Артура (статьи, ТЗ, архивы; бывают данные ВНИГНИ) — не в git
+материалы/

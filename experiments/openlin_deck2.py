@@ -27,7 +27,7 @@ from pptx.enum.shapes import MSO_SHAPE
 from pptx.enum.text import PP_ALIGN
 from pptx.util import Inches, Pt
 
-SRC = Path("presentation/Линеаменты по космоснимкам.pptx")
+SRC = Path("presentation/2026-09_10_линеаменты_по_космоснимкам/Линеаменты по космоснимкам.pptx")
 FIG = Path("outputs/slides")
 OUTPUTS = Path("outputs")
 

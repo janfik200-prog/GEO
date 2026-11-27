@@ -36,14 +36,31 @@ QNORM = (5, 6, 7, 17, 18, 19)         # признаки с квантильно
 # ---------------------------------------------------------------- кандидаты (CAND3, с ломаными)
 def candidates(site, log):
     """CAND3 как принят: трассировка CAND2 + отбор без дублей. Возвращает линии пула с ломаными."""
-    from experiments.openlin_anfisa_lines import rasterize
     img, dem, valid, meta = C1.load_inputs(site)
+    pool = candidates_arr(img, dem, valid, log, site_check=site)
+    km = sum(len(p["cells"]) for p in pool) * RES_IN / 1000
+    area = valid.sum() * RES_IN ** 2 / 1e6
+    import hashlib
+    h = hashlib.sha256()
+    for p in pool:
+        h.update(np.array([p["ch"]], "int32").tobytes())
+        h.update(np.ascontiguousarray(p["cells"], "int32").tobytes())
+    log(f"  {site}: кандидатов CAND3 {len(pool)}, {km:.0f} км (растр, сумма), {km / area:.2f} км/км²; по каналам: "
+        + ", ".join(f"{C1.CHANNELS[ch]} {sum(p['ch'] == ch for p in pool)}" for ch in range(5))
+        + f"; sha пула {h.hexdigest()[:16]}")
+    return pool, img, dem, valid, meta
+
+
+def candidates_arr(img, dem, valid, log, site_check: str | None = None) -> list[dict]:
+    """То же, что candidates, но по массивам в памяти (SYN1: подделки со вставками). Сверка с CAND2
+    по числу линий и км — только при site_check == "utsjoki". Возвращает пул CAND3 с ломаными."""
+    from experiments.openlin_anfisa_lines import rasterize
     chans, polys = {}, {}
     for ch in range(len(C1.CHANNELS)):
         r, th = C1.response(ch, img, dem)
         z = C2.local_norm_nz(r, valid)
         lines, km = C2.trace_z(z, th, valid, lambda *a: None, "снимок")
-        if site == "utsjoki":
+        if site_check == "utsjoki":
             assert (len(lines), round(km)) == C3.CAND2_UTS[ch], "трассировка не совпала с CAND2/CAND3"
         ids = rasterize(lines, valid.shape, 1)
         n = int(ids.max())
@@ -58,17 +75,7 @@ def candidates(site, log):
         a, b = start[j - 1], start[j]
         pool.append({"ch": ch, "cells": np.stack([rr[a:b], cc[a:b]], 1), "poly": polys[ch][j - 1],
                      "mz": float(chans[ch]["mz"][j])})
-    km = sum(len(p["cells"]) for p in pool) * RES_IN / 1000
-    area = valid.sum() * RES_IN ** 2 / 1e6
-    import hashlib
-    h = hashlib.sha256()
-    for p in pool:
-        h.update(np.array([p["ch"]], "int32").tobytes())
-        h.update(np.ascontiguousarray(p["cells"], "int32").tobytes())
-    log(f"  {site}: кандидатов CAND3 {len(pool)}, {km:.0f} км (растр, сумма), {km / area:.2f} км/км²; по каналам: "
-        + ", ".join(f"{C1.CHANNELS[ch]} {sum(p['ch'] == ch for p in pool)}" for ch in range(5))
-        + f"; sha пула {h.hexdigest()[:16]}")
-    return pool, img, dem, valid, meta
+    return pool
 
 
 # ---------------------------------------------------------------- признаки линии
